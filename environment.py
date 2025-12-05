@@ -64,17 +64,6 @@ class ImprovedTransformerCoolingEnv:
             'reward_components': []
         }
 
-        def _determine_target_temp(self) -> float:
-            """根据配置选择目标温度"""
-            mode = getattr(CONFIG.env, 'TARGET_MODE', 'fixed')
-            if mode == 'adaptive':
-                oil_temps = self.data['oil_temp'].astype(float)
-                percentile = getattr(CONFIG.env, 'ADAPTIVE_TARGET_PERCENTILE', 55)
-                dynamic_target = float(np.percentile(oil_temps, percentile))
-                return dynamic_target
-            return getattr(CONFIG.env, 'TARGET_TEMP', 60.0)
-
-
     def reset(self) -> np.ndarray:
         """重置环境"""
         self.current_idx = self.start_idx
@@ -214,6 +203,16 @@ class ImprovedTransformerCoolingEnv:
         total_cooling = water_cooling + peltier_cooling
 
         return total_cooling
+
+    def _determine_target_temp(self) -> float:
+        """根据配置选择目标温度"""
+        mode = getattr(CONFIG.env, 'TARGET_MODE', 'fixed')
+        if mode == 'adaptive':
+            oil_temps = self.data['oil_temp'].astype(float)
+            percentile = getattr(CONFIG.env, 'ADAPTIVE_TARGET_PERCENTILE', 55)
+            dynamic_target = float(np.percentile(oil_temps, percentile))
+            return dynamic_target
+        return getattr(CONFIG.env, 'TARGET_TEMP', 60.0)
 
     def _determine_temperature_zone(self, oil_temp: float) -> str:
         """确定温度区间"""
