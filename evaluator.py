@@ -206,11 +206,11 @@ class Evaluator:
         actions = np.array(actions)
         log_probs = np.array(log_probs)
 
-        # ⭐ 计算温度控制指标
+        # ⭐ 计算温度控制指标␊
         temp_metrics = self.metrics_calc.calculate_temperature_control_metrics(
-            temperatures=temperatures,
-            target_temp=CONFIG.env.TARGET_TEMP,
-            tolerance=CONFIG.env.TEMP_TOLERANCE
+        temperatures = temperatures,
+        target_temp = self.env.target_temp,
+        tolerance = CONFIG.env.TEMP_TOLERANCE
         )
 
         # ⭐ 计算回报指标
@@ -232,7 +232,8 @@ class Evaluator:
             'avg_temp': np.mean(temperatures),
             'max_temp': np.max(temperatures),
             'min_temp': np.min(temperatures),
-            'steps': step
+            'steps': step,
+            'target_temp': self.env.target_temp
         }
 
     def evaluate_multiple_episodes(self, num_episodes: int = 10, verbose: bool = True) -> Dict:
@@ -441,17 +442,14 @@ def generate_evaluation_csv_files(results: Dict, save_dir: str = 'results'):
 
         for ep_idx, episode in enumerate(episodes[:3]):
             # 温度控制CSV
+            target_temp = episode.get('target_temp', CONFIG.env.TARGET_TEMP)
             temp_df = pd.DataFrame({
                 'step': range(len(episode['temperatures'])),
                 'temperature': episode['temperatures'],
-                'target_temp': CONFIG.env.TARGET_TEMP,
-                'upper_bound': CONFIG.env.TARGET_TEMP + CONFIG.env.TEMP_TOLERANCE,
-                'lower_bound': CONFIG.env.TARGET_TEMP - CONFIG.env.TEMP_TOLERANCE
+                'target_temp': target_temp,
+                'upper_bound': target_temp + CONFIG.env.TEMP_TOLERANCE,
+                'lower_bound': target_temp - CONFIG.env.TEMP_TOLERANCE
             })
-            temp_df.to_csv(
-                os.path.join(save_dir, f'{algo_name}_temperature_control_ep{ep_idx}.csv'),
-                index=False
-            )
 
             # 控制动作CSV
             action_df = pd.DataFrame(

@@ -29,7 +29,11 @@ DEVICE = get_device()
 # ============= 环境参数 =============
 class EnvironmentConfig:
     """变压器冷却环境配置"""
-    TARGET_TEMP = 50.0
+    # 目标温度设置
+    TARGET_TEMP = 60.0  # 默认固定目标
+    TARGET_MODE = 'adaptive'  # 'fixed' 或 'adaptive'
+    ADAPTIVE_TARGET_PERCENTILE = 55  # 自适应时使用的油温分位数
+    TEMP_TOLERANCE = 2.5  # 评估和奖励时允许的温度波动范围
     WATER_TEMP = 25.0
     TANK_CAPACITY = 140
     NOZZLE_COUNT = 42

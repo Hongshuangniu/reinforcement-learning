@@ -129,7 +129,7 @@ class Trainer:
 
                 episode_reward += reward
                 episode_temps.append(info['oil_temp'])
-                target_temps.append(CONFIG.env.TARGET_TEMP)
+                target_temps.append(self.env.target_temp)
                 episode_actions.append(action.copy())
 
                 state = next_state

@@ -37,7 +37,8 @@ class ImprovedTransformerCoolingEnv:
         self.action_dim = CONFIG.env.ACTION_DIM
 
         # 环境参数
-        self.target_temp = CONFIG.env.TARGET_TEMP
+        # 环境参数（支持自适应目标温度）
+        self.target_temp = self._determine_target_temp()
         self.water_temp = CONFIG.env.WATER_TEMP
         self.tank_capacity = CONFIG.env.TANK_CAPACITY
         self.nozzle_count = CONFIG.env.NOZZLE_COUNT
@@ -62,6 +63,17 @@ class ImprovedTransformerCoolingEnv:
             'ambient_temps': [],
             'reward_components': []
         }
+
+        def _determine_target_temp(self) -> float:
+            """根据配置选择目标温度"""
+            mode = getattr(CONFIG.env, 'TARGET_MODE', 'fixed')
+            if mode == 'adaptive':
+                oil_temps = self.data['oil_temp'].astype(float)
+                percentile = getattr(CONFIG.env, 'ADAPTIVE_TARGET_PERCENTILE', 55)
+                dynamic_target = float(np.percentile(oil_temps, percentile))
+                return dynamic_target
+            return getattr(CONFIG.env, 'TARGET_TEMP', 60.0)
+
 
     def reset(self) -> np.ndarray:
         """重置环境"""
