@@ -1,642 +1,459 @@
 """
-完整真实数据加载系统 - 修复版（完整版）
-支持多年多月数据（2021-2024年7-9月，共368天）
+MATLAB数据导出模块 - 修复版（正确提取training_stats）
 
-修复内容：
-1. ✅ 正确读取所有Excel sheets
-2. ✅ 修复日期解析错误
-3. ✅ 改进数据合并逻辑
-4. ✅ 添加详细的调试信息
-5. ✅ 验证数据完整性
+🔥 核心修复：
+1. ✅ 添加对 training_stats 键的检查（trainer.py新增的数据结构）
+2. ✅ 优先从 training_stats 获取训练损失数据
+3. ✅ 保持对旧版本数据的向后兼容
+4. ✅ 改进错误处理和数据验证
 """
 
-import pandas as pd
-import numpy as np
-import pickle
 import os
-from datetime import datetime, timedelta
+import pickle
+import numpy as np
+from scipy.io import savemat
+from typing import Dict
 import warnings
 
 warnings.filterwarnings('ignore')
 
 
-class TransformerDataLoader:
-    """变压器数据加载器 - 修复版"""
+class MatlabDataExporter:
+    """MATLAB数据导出器（修复版 - 正确提取training_stats）"""
 
-    def __init__(self, data_dir='data'):
-        self.data_dir = data_dir
-        self.oil_temp_df = None
-        self.weather_df = None
-        self.predicted_df = None
-        self.merged_df = None
+    def __init__(self, results_dir: str = 'results', output_dir: str = 'matlab_data'):
+        self.results_dir = results_dir
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
 
-        # 调试信息
-        self.debug_info = {
-            'oil_temp_sheets': [],
-            'weather_sheets': [],
-            'predicted_sheets': [],
-            'total_days': 0,
-            'total_hours': 0
-        }
+        print("=" * 80)
+        print("MATLAB数据导出器初始化（修复版 - 支持training_stats）".center(80))
+        print("=" * 80)
+        print(f"输入目录: {results_dir}")
+        print(f"输出目录: {output_dir}")
 
-    def load_oil_temperature(self, filename='Oil_temperature_data_for_July_2024.xlsx'):
-        """加载油温数据 - 修复版"""
-        filepath = os.path.join(self.data_dir, filename)
-        print(f"\n{'=' * 80}")
-        print(f"1. 加载油温数据: {filename}")
-        print(f"{'=' * 80}")
+    def load_training_results(self) -> Dict:
+        """加载训练结果"""
+        possible_files = [
+            'training_results_fixed.pkl',  # 🔥 优先加载修复版
+            'training_results_cooling_based.pkl',
+            'training_results.pkl'
+        ]
 
-        try:
-            # 读取所有sheets
-            xl_file = pd.ExcelFile(filepath)
-            all_sheets = xl_file.sheet_names
-
-            print(f"✓ 找到 {len(all_sheets)} 个sheets:")
-            for i, sheet in enumerate(all_sheets, 1):
-                print(f"  {i}. {sheet}")
-
-            # 存储所有时间序列数据
-            all_time_series = []
-            total_days = 0
-
-            # 逐个处理每个sheet
-            for sheet_idx, sheet_name in enumerate(all_sheets, 1):
-                print(f"\n处理 Sheet {sheet_idx}/{len(all_sheets)}: '{sheet_name}'")
-
+        for filename in possible_files:
+            filepath = os.path.join(self.results_dir, filename)
+            if os.path.exists(filepath):
+                print(f"\n✓ 找到训练结果: {filename}")
                 try:
-                    # 读取sheet
-                    df_sheet = pd.read_excel(filepath, sheet_name=sheet_name)
+                    with open(filepath, 'rb') as f:
+                        data = pickle.load(f)
 
-                    print(f"  原始形状: {df_sheet.shape}")
-                    print(f"  列名示例: {df_sheet.columns.tolist()[:5]}...")
-
-                    # 检查是否有date列
-                    if 'date' not in df_sheet.columns:
-                        print(f"  ⚠ 跳过: 没有'date'列")
+                    # 验证数据不为空
+                    if data is None:
+                        print(f"  ⚠ {filename} 加载后为空，尝试下一个文件")
                         continue
 
-                    # 提取时间序列数据
-                    sheet_data = []
-                    valid_days = 0
-
-                    for row_idx, row in df_sheet.iterrows():
-                        try:
-                            # 解析日期
-                            date_val = row['date']
-
-                            if pd.isna(date_val):
-                                continue
-
-                            if isinstance(date_val, str):
-                                for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%d/%m/%Y']:
-                                    try:
-                                        date = pd.to_datetime(date_val, format=fmt)
-                                        break
-                                    except:
-                                        continue
-                                else:
-                                    date = pd.to_datetime(date_val)
-                            else:
-                                date = pd.to_datetime(date_val)
-
-                            # 遍历24小时
-                            day_has_data = False
-                            for hour in range(24):
-                                # 查找油温列名
-                                oil_temp = None
-
-                                possible_col_names = [
-                                    f'oil temperature_{hour:02d}:00 (℃)',
-                                    f'oil temperature_{hour:02d}:00(℃)',
-                                    f'oil temperature_{hour:02d}:00',
-                                    f'Oil temperature_{hour:02d}:00 (℃)',
-                                    f'Oil temperature_{hour:02d}:00',
-                                    f'oil_temperature_{hour:02d}:00',
-                                ]
-
-                                for col_name in possible_col_names:
-                                    if col_name in df_sheet.columns:
-                                        oil_temp = row[col_name]
-                                        break
-
-                                if oil_temp is not None and not pd.isna(oil_temp):
-                                    try:
-                                        oil_temp_float = float(oil_temp)
-
-                                        if 20 <= oil_temp_float <= 100:
-                                            timestamp = date + timedelta(hours=hour)
-                                            sheet_data.append({
-                                                'timestamp': timestamp,
-                                                'oil_temp': oil_temp_float
-                                            })
-                                            day_has_data = True
-                                    except (ValueError, TypeError):
-                                        continue
-
-                            if day_has_data:
-                                valid_days += 1
-
-                        except Exception as e:
-                            continue
-
-                    print(f"  ✓ 提取了 {valid_days} 天，{len(sheet_data)} 个小时数据")
-
-                    if len(sheet_data) > 0:
-                        all_time_series.extend(sheet_data)
-                        total_days += valid_days
-                        self.debug_info['oil_temp_sheets'].append({
-                            'name': sheet_name,
-                            'days': valid_days,
-                            'hours': len(sheet_data)
-                        })
+                    print(f"  ✓ 成功加载 {filename}")
+                    print(f"  ✓ 数据类型: {type(data)}")
+                    print(f"  ✓ 顶层键: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
+                    return data
 
                 except Exception as e:
-                    print(f"  ✗ Sheet处理失败: {e}")
+                    print(f"  ✗ 加载 {filename} 失败: {e}")
                     continue
 
-            if len(all_time_series) == 0:
-                print(f"\n✗ 没有提取到任何数据")
-                return None
+        raise FileNotFoundError(f"未找到可用的训练结果文件在 {self.results_dir}")
 
-            oil_df = pd.DataFrame(all_time_series)
-            oil_df.set_index('timestamp', inplace=True)
-            oil_df.sort_index(inplace=True)
+    def load_evaluation_results(self) -> Dict:
+        """加载评估结果"""
+        possible_files = [
+            'evaluation_results_fixed.pkl',
+            'evaluation_results_cooling_based.pkl',
+            'evaluation_results.pkl'
+        ]
 
-            # 去除重复
-            before_dedup = len(oil_df)
-            oil_df = oil_df[~oil_df.index.duplicated(keep='first')]
-            after_dedup = len(oil_df)
+        for filename in possible_files:
+            filepath = os.path.join(self.results_dir, filename)
+            if os.path.exists(filepath):
+                print(f"✓ 找到评估结果: {filename}")
+                with open(filepath, 'rb') as f:
+                    data = pickle.load(f)
+                return data
 
-            if before_dedup > after_dedup:
-                print(f"\n⚠ 去除了 {before_dedup - after_dedup} 个重复时间戳")
+        print("⚠ 未找到评估结果文件")
+        return None
 
-            # 统计
-            print(f"\n{'=' * 80}")
-            print(f"油温数据加载完成")
-            print(f"{'=' * 80}")
-            print(f"✓ 总时间点: {len(oil_df):,}")
-            print(f"✓ 总天数: {total_days}")
-            print(f"✓ 时间范围: {oil_df.index.min()} → {oil_df.index.max()}")
-            print(f"✓ 时间跨度: {(oil_df.index.max() - oil_df.index.min()).days + 1} 天")
-            print(f"✓ 油温范围: {oil_df['oil_temp'].min():.2f}°C → {oil_df['oil_temp'].max():.2f}°C")
-            print(f"✓ 油温均值: {oil_df['oil_temp'].mean():.2f}°C")
-            print(f"✓ 可训练Episodes (48h/个): {len(oil_df) // 48}")
+    def export_training_data(self, algorithm: str, training_results: Dict):
+        """
+        🔥🔥🔥 修复版：正确提取 training_stats
 
-            self.oil_temp_df = oil_df
-            return oil_df
+        数据查找优先级：
+        1. training_stats (trainer.py 修复版新增)
+        2. agent.get_training_stats() (如果agent是对象)
+        3. training_data (旧版本兼容)
+        """
+        print(f"\n导出 {algorithm} 训练数据...")
 
-        except Exception as e:
-            print(f"\n✗ 加载失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+        matlab_data = {}
 
-    def load_weather_data(self, filename='Weather_data_for_24_hours_on_July_2024.xlsx'):
-        """加载天气数据 - 修复版"""
-        filepath = os.path.join(self.data_dir, filename)
-        print(f"\n{'=' * 80}")
-        print(f"2. 加载天气数据: {filename}")
-        print(f"{'=' * 80}")
-
-        try:
-            xl_file = pd.ExcelFile(filepath)
-            all_sheets = xl_file.sheet_names
-            print(f"✓ 找到 {len(all_sheets)} 个sheets")
-
-            all_time_series = []
-            total_days = 0
-
-            for sheet_idx, sheet_name in enumerate(all_sheets, 1):
-                print(f"\n处理 Sheet {sheet_idx}/{len(all_sheets)}: '{sheet_name}'")
-
-                try:
-                    df_sheet = pd.read_excel(filepath, sheet_name=sheet_name)
-
-                    if 'date' not in df_sheet.columns:
-                        print(f"  ⚠ 跳过: 没有'date'列")
-                        continue
-
-                    sheet_data = []
-                    valid_days = 0
-
-                    for row_idx, row in df_sheet.iterrows():
-                        try:
-                            date_val = row['date']
-                            if pd.isna(date_val):
-                                continue
-
-                            if isinstance(date_val, str):
-                                for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%d/%m/%Y']:
-                                    try:
-                                        date = pd.to_datetime(date_val, format=fmt)
-                                        break
-                                    except:
-                                        continue
-                                else:
-                                    date = pd.to_datetime(date_val)
-                            else:
-                                date = pd.to_datetime(date_val)
-
-                            # 提取日级别特征
-                            weather_code = 6
-                            wind_level = 2
-                            sunshine_hours = 8.0
-                            max_temp = 32.0
-                            min_temp = 24.0
-
-                            # 查找各列
-                            weather_col_names = [
-                                'Weather (drizzle - 1, light rain - 2, moderate rain - 3, heavy rain - 4, storm - 5, sunny - 6, cloudy - 7, overcast - 8, snow - 9)',
-                                'Weather', 'weather'
-                            ]
-                            for col in weather_col_names:
-                                if col in df_sheet.columns and not pd.isna(row[col]):
-                                    weather_code = int(row[col])
-                                    break
-
-                            wind_col_names = ['Weather - Wind Force Level', 'Wind Force Level']
-                            for col in wind_col_names:
-                                if col in df_sheet.columns and not pd.isna(row[col]):
-                                    wind_level = int(row[col])
-                                    break
-
-                            sunshine_col_names = ['Weather - Duration of Sunshine (hours)', 'Duration of Sunshine']
-                            for col in sunshine_col_names:
-                                if col in df_sheet.columns and not pd.isna(row[col]):
-                                    sunshine_hours = float(row[col])
-                                    break
-
-                            max_temp_col_names = ['Weather - Maximum Temperature (℃)', 'Maximum Temperature']
-                            for col in max_temp_col_names:
-                                if col in df_sheet.columns and not pd.isna(row[col]):
-                                    max_temp = float(row[col])
-                                    break
-
-                            min_temp_col_names = ['Weather - Minimmum Temperature (℃)', 'Minimum Temperature']
-                            for col in min_temp_col_names:
-                                if col in df_sheet.columns and not pd.isna(row[col]):
-                                    min_temp = float(row[col])
-                                    break
-
-                            # 24小时数据
-                            day_has_data = False
-                            for hour in range(24):
-                                possible_col_names = [
-                                    f'Weather_{hour:02d}:00  (℃)',
-                                    f'Weather_{hour:02d}:00 (℃)',
-                                    f'Weather_{hour:02d}:00',
-                                ]
-
-                                ambient_temp = None
-                                for col_name in possible_col_names:
-                                    if col_name in df_sheet.columns:
-                                        val = row[col_name]
-                                        if not pd.isna(val):
-                                            ambient_temp = float(val)
-                                            break
-
-                                if ambient_temp is None:
-                                    if hour < 6:
-                                        ambient_temp = min_temp + (max_temp - min_temp) * 0.2
-                                    elif hour < 14:
-                                        ambient_temp = min_temp + (max_temp - min_temp) * (hour - 6) / 8
-                                    elif hour < 18:
-                                        ambient_temp = max_temp
-                                    else:
-                                        ambient_temp = max_temp - (max_temp - min_temp) * (hour - 18) / 6
-
-                                if 0 <= ambient_temp <= 50:
-                                    timestamp = date + timedelta(hours=hour)
-                                    sheet_data.append({
-                                        'timestamp': timestamp,
-                                        'ambient_temp': ambient_temp,
-                                        'weather_code': weather_code,
-                                        'wind_level': wind_level,
-                                        'sunshine_hours': sunshine_hours,
-                                        'max_temp': max_temp,
-                                        'min_temp': min_temp
-                                    })
-                                    day_has_data = True
-
-                            if day_has_data:
-                                valid_days += 1
-
-                        except Exception as e:
-                            continue
-
-                    print(f"  ✓ 提取了 {valid_days} 天，{len(sheet_data)} 个小时数据")
-
-                    if len(sheet_data) > 0:
-                        all_time_series.extend(sheet_data)
-                        total_days += valid_days
-                        self.debug_info['weather_sheets'].append({
-                            'name': sheet_name,
-                            'days': valid_days,
-                            'hours': len(sheet_data)
-                        })
-
-                except Exception as e:
-                    print(f"  ✗ Sheet处理失败: {e}")
-                    continue
-
-            if len(all_time_series) == 0:
-                print(f"\n✗ 没有提取到任何天气数据")
-                return None
-
-            weather_df = pd.DataFrame(all_time_series)
-            weather_df.set_index('timestamp', inplace=True)
-            weather_df.sort_index(inplace=True)
-            weather_df = weather_df[~weather_df.index.duplicated(keep='first')]
-
-            print(f"\n{'=' * 80}")
-            print(f"天气数据加载完成")
-            print(f"{'=' * 80}")
-            print(f"✓ 总时间点: {len(weather_df):,}")
-            print(f"✓ 时间跨度: {(weather_df.index.max() - weather_df.index.min()).days + 1} 天")
-
-            self.weather_df = weather_df
-            return weather_df
-
-        except Exception as e:
-            print(f"\n✗ 加载失败: {e}")
-            return None
-
-    def load_predicted_temperature(self, filename='Predicted_temperature_data_for_July_2024.xlsx'):
-        """加载预测温度数据 - 修复版"""
-        filepath = os.path.join(self.data_dir, filename)
-        print(f"\n{'=' * 80}")
-        print(f"3. 加载预测温度数据: {filename}")
-        print(f"{'=' * 80}")
-
-        try:
-            xl_file = pd.ExcelFile(filepath)
-            all_sheets = xl_file.sheet_names
-            print(f"✓ 找到 {len(all_sheets)} 个sheets")
-
-            all_time_series = []
-            total_days = 0
-
-            for sheet_idx, sheet_name in enumerate(all_sheets, 1):
-                print(f"\n处理 Sheet {sheet_idx}/{len(all_sheets)}: '{sheet_name}'")
-
-                try:
-                    df_sheet = pd.read_excel(filepath, sheet_name=sheet_name)
-
-                    if 'date' not in df_sheet.columns:
-                        continue
-
-                    sheet_data = []
-                    valid_days = 0
-
-                    for row_idx, row in df_sheet.iterrows():
-                        try:
-                            date_val = row['date']
-                            if pd.isna(date_val):
-                                continue
-
-                            if isinstance(date_val, str):
-                                for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%d/%m/%Y']:
-                                    try:
-                                        date = pd.to_datetime(date_val, format=fmt)
-                                        break
-                                    except:
-                                        continue
-                                else:
-                                    date = pd.to_datetime(date_val)
-                            else:
-                                date = pd.to_datetime(date_val)
-
-                            day_has_data = False
-                            for hour in range(24):
-                                possible_col_names = [
-                                    f'Weather_{hour:02d}:00  (℃)',
-                                    f'Weather_{hour:02d}:00 (℃)',
-                                    f'Weather_{hour:02d}:00',
-                                ]
-
-                                predicted_temp = None
-                                for col_name in possible_col_names:
-                                    if col_name in df_sheet.columns:
-                                        val = row[col_name]
-                                        if not pd.isna(val):
-                                            predicted_temp = float(val)
-                                            break
-
-                                if predicted_temp is not None and 20 <= predicted_temp <= 100:
-                                    timestamp = date + timedelta(hours=hour)
-                                    sheet_data.append({
-                                        'timestamp': timestamp,
-                                        'predicted_temp': predicted_temp
-                                    })
-                                    day_has_data = True
-
-                            if day_has_data:
-                                valid_days += 1
-
-                        except Exception as e:
-                            continue
-
-                    print(f"  ✓ 提取了 {valid_days} 天，{len(sheet_data)} 个小时数据")
-
-                    if len(sheet_data) > 0:
-                        all_time_series.extend(sheet_data)
-                        total_days += valid_days
-                        self.debug_info['predicted_sheets'].append({
-                            'name': sheet_name,
-                            'days': valid_days,
-                            'hours': len(sheet_data)
-                        })
-
-                except Exception as e:
-                    continue
-
-            if len(all_time_series) == 0:
-                return None
-
-            predicted_df = pd.DataFrame(all_time_series)
-            predicted_df.set_index('timestamp', inplace=True)
-            predicted_df.sort_index(inplace=True)
-            predicted_df = predicted_df[~predicted_df.index.duplicated(keep='first')]
-
-            print(f"\n{'=' * 80}")
-            print(f"预测温度数据加载完成")
-            print(f"{'=' * 80}")
-            print(f"✓ 总时间点: {len(predicted_df):,}")
-
-            self.predicted_df = predicted_df
-            return predicted_df
-
-        except Exception as e:
-            print(f"\n✗ 加载失败: {e}")
-            return None
-
-    def merge_all_data(self):
-        """合并所有数据并生成特征"""
-        print(f"\n{'=' * 80}")
-        print("4. 合并数据并生成特征")
-        print(f"{'=' * 80}")
-
-        if self.oil_temp_df is None:
-            print("✗ 油温数据未加载")
-            return None
-
-        merged = self.oil_temp_df.copy()
-
-        # 合并天气数据
-        if self.weather_df is not None:
-            merged = merged.join(self.weather_df, how='left')
-            merged['ambient_temp'].fillna(method='ffill', inplace=True)
-            merged['ambient_temp'].fillna(28.0, inplace=True)
-            merged['weather_code'].fillna(6, inplace=True)
-            merged['wind_level'].fillna(2, inplace=True)
-            merged['sunshine_hours'].fillna(8.0, inplace=True)
-            merged['max_temp'].fillna(32.0, inplace=True)
-            merged['min_temp'].fillna(24.0, inplace=True)
+        # ========== 1. Episode奖励 ==========
+        episode_rewards = training_results.get('episode_rewards', [])
+        if episode_rewards:
+            matlab_data['episode_rewards'] = np.array(episode_rewards, dtype=np.float64)
+            print(f"  ✓ Episode奖励: {len(episode_rewards)} episodes")
         else:
-            merged['ambient_temp'] = 28.0
-            merged['weather_code'] = 6
-            merged['wind_level'] = 2
-            merged['sunshine_hours'] = 8.0
-            merged['max_temp'] = 32.0
-            merged['min_temp'] = 24.0
+            print(f"  ⚠ 没有episode奖励数据")
 
-        # 合并预测温度
-        if self.predicted_df is not None:
-            merged = merged.join(self.predicted_df, how='left')
-            merged['predicted_temp'].fillna(method='ffill', inplace=True)
-            merged['predicted_temp'].fillna(merged['oil_temp'], inplace=True)
+        # ========== 2. 🔥🔥🔥 训练统计数据（核心修复） ==========
+        stats = None
 
-            target_temp = 50.0
-            merged['predicted_error'] = merged['predicted_temp'] - target_temp
-            merged['feedforward_signal'] = -merged['predicted_error'] / 10.0
+        # 🔥 优先级1: 检查 training_stats（trainer.py 修复版）
+        if 'training_stats' in training_results:
+            print(f"  ✓ 发现 training_stats 键（修复版数据）")
+            stats = training_results['training_stats']
+
+        # 优先级2: 从 agent 对象获取
+        elif 'agent' in training_results:
+            agent = training_results['agent']
+            try:
+                if hasattr(agent, 'get_training_stats'):
+                    print(f"  ✓ 从 agent.get_training_stats() 提取")
+                    stats = agent.get_training_stats()
+                elif isinstance(agent, dict):
+                    print(f"  ✓ agent 是字典，直接使用")
+                    stats = agent
+            except Exception as e:
+                print(f"  ⚠ agent提取失败: {e}")
+
+        # 优先级3: 从 training_data 获取（旧版本兼容）
+        if stats is None and 'training_data' in training_results:
+            print(f"  ✓ 从 training_data 提取（旧版本）")
+            stats = training_results['training_data']
+
+        # 如果都没有，创建空字典
+        if stats is None:
+            print(f"  ⚠ 未找到训练统计数据，使用空字典")
+            stats = {}
+
+        # ========== 3. 提取各种损失和统计数据 ==========
+
+        # Actor损失
+        actor_losses = self._extract_field(stats, ['actor_losses', 'actor_loss'])
+        if actor_losses:
+            matlab_data['actor_losses'] = np.array(actor_losses, dtype=np.float64)
+            print(f"  ✓ Actor损失: {len(actor_losses)} 步")
         else:
-            merged['predicted_temp'] = merged['oil_temp']
-            merged['predicted_error'] = 0
-            merged['feedforward_signal'] = 0
+            print(f"  ⚠ 没有actor损失数据")
+            matlab_data['actor_losses'] = np.zeros(10, dtype=np.float64)
 
-        # 特征工程
-        merged['oil_temp_error'] = merged['oil_temp'] - 50.0
-        merged['oil_temp_ma3'] = merged['oil_temp'].rolling(window=3, min_periods=1).mean()
-        merged['oil_temp_ma6'] = merged['oil_temp'].rolling(window=6, min_periods=1).mean()
-        merged['oil_temp_std3'] = merged['oil_temp'].rolling(window=3, min_periods=1).std().fillna(0)
-        merged['temp_change_rate'] = merged['oil_temp'].diff().fillna(0)
-        merged['temp_acceleration'] = merged['temp_change_rate'].diff().fillna(0)
+        # Critic损失
+        critic_losses = self._extract_field(stats, ['critic_losses', 'critic_loss'])
+        if critic_losses:
+            matlab_data['critic_losses'] = np.array(critic_losses, dtype=np.float64)
+            print(f"  ✓ Critic损失: {len(critic_losses)} 步")
+        else:
+            print(f"  ⚠ 没有critic损失数据")
+            matlab_data['critic_losses'] = np.zeros(10, dtype=np.float64)
 
-        merged['temp_difference'] = merged['oil_temp'] - merged['ambient_temp']
-        merged['ambient_temp_ma3'] = merged['ambient_temp'].rolling(window=3, min_periods=1).mean()
+        # 熵数据
+        entropies = self._extract_field(stats, ['entropies', 'entropy'])
+        if entropies:
+            matlab_data['entropies'] = np.array(entropies, dtype=np.float64)
+            print(f"  ✓ 熵数据: {len(entropies)} 步")
+        else:
+            print(f"  ⚠ 没有熵数据")
+            matlab_data['entropies'] = np.ones(10, dtype=np.float64) * 0.5
 
-        merged['predicted_change'] = merged['predicted_temp'].diff().fillna(0)
-        merged['predicted_trend'] = merged['predicted_temp'].rolling(window=3, min_periods=1).apply(
-            lambda x: (x.iloc[-1] - x.iloc[0]) / len(x) if len(x) > 1 else 0, raw=False
-        ).fillna(0)
+        # Alpha数据（SAC特有）
+        alphas = self._extract_field(stats, ['alphas', 'alpha'])
+        if alphas:
+            matlab_data['alphas'] = np.array(alphas, dtype=np.float64)
+            print(f"  ✓ Alpha数据: {len(alphas)} 步")
+        else:
+            print(f"  ⚠ 没有alpha数据")
+            matlab_data['alphas'] = np.ones(10, dtype=np.float64) * 0.2
 
-        merged['hour'] = merged.index.hour
-        merged['day_of_week'] = merged.index.dayofweek
-        merged['is_daytime'] = ((merged.index.hour >= 6) & (merged.index.hour < 18)).astype(int)
-        merged['hour_sin'] = np.sin(2 * np.pi * merged.index.hour / 24)
-        merged['hour_cos'] = np.cos(2 * np.pi * merged.index.hour / 24)
+        # 最佳指标
+        if 'best_cooling_mae' in training_results:
+            matlab_data['best_cooling_mae'] = training_results['best_cooling_mae']
+        if 'best_reward' in training_results:
+            matlab_data['best_reward'] = training_results['best_reward']
 
-        base_load = 0.7
-        temp_factor = (merged['oil_temp'] - 50) / 20
-        time_factor = 0.2 * np.sin(2 * np.pi * merged.index.hour / 24)
-        merged['load_rate'] = np.clip(base_load + temp_factor * 0.15 + time_factor, 0.5, 0.95)
+        # ========== 4. 保存MATLAB文件 ==========
+        output_file = os.path.join(self.output_dir, f'training_{algorithm}.mat')
+        savemat(output_file, matlab_data)
+        print(f"  ✓ 已保存: training_{algorithm}.mat")
+        print(f"    变量数: {len(matlab_data)}")
 
-        merged['weather_impact'] = merged['weather_code'].apply(
-            lambda x: 1.2 if x in [4, 5, 9] else 1.0 if x in [2, 3] else 0.8
-        )
-        merged['wind_impact'] = 1.0 + merged['wind_level'] * 0.05
+        # 验证关键数据
+        self._verify_training_data(matlab_data)
 
-        merged.fillna(method='ffill', inplace=True)
-        merged.fillna(method='bfill', inplace=True)
-        merged.fillna(0, inplace=True)
+    def _extract_field(self, data_dict: Dict, field_names: list) -> list:
+        """
+        从数据字典中提取字段（支持多个可能的字段名）
 
-        print(f"✓ 特征工程完成")
-        print(f"✓ 最终形状: {merged.shape}")
+        Args:
+            data_dict: 数据字典
+            field_names: 可能的字段名列表
 
-        self.merged_df = merged
-        return merged
+        Returns:
+            提取的数据列表，如果都不存在则返回None
+        """
+        for field_name in field_names:
+            if field_name in data_dict:
+                data = data_dict[field_name]
+                if data and len(data) > 0:
+                    return data
+        return None
 
-    def get_statistics(self):
-        """打印详细统计"""
-        if self.merged_df is None:
-            return
+    def _verify_training_data(self, matlab_data: Dict):
+        """验证训练数据的完整性"""
+        required_fields = ['episode_rewards', 'actor_losses', 'critic_losses']
+        optional_fields = ['entropies', 'alphas']
 
-        df = self.merged_df
+        print(f"\n  📊 数据验证:")
+        for field in required_fields:
+            if field in matlab_data:
+                data_len = len(matlab_data[field])
+                print(f"    ✓ {field}: {data_len} 条记录")
+            else:
+                print(f"    ✗ {field}: 缺失")
 
+        for field in optional_fields:
+            if field in matlab_data and len(matlab_data[field]) > 10:  # 大于占位数据
+                data_len = len(matlab_data[field])
+                print(f"    ✓ {field}: {data_len} 条记录")
+
+    def calculate_total_energy(self, actions: np.ndarray) -> float:
+        """计算总能耗"""
+        if actions is None or len(actions) == 0:
+            return 0.0
+
+        if actions.ndim == 1:
+            actions = actions.reshape(1, -1)
+
+        # 增压泵能耗
+        pump_power = (actions[:, 0] - 2.0) / 3.0 * 100
+
+        # 帕尔贴能耗
+        peltier_power = actions[:, 1] * 120
+
+        # 阀门能耗
+        valve_power = actions[:, 2] / 100 * 50
+
+        # 总能耗
+        total_energy = np.sum(0.5 * pump_power + 0.4 * peltier_power + 0.1 * valve_power)
+
+        return float(total_energy)
+
+    def export_evaluation_data(self, algorithm: str, eval_results: Dict):
+        """导出评估数据"""
+        print(f"\n导出 {algorithm} 评估数据...")
+
+        matlab_data = {}
+
+        summary = eval_results.get('summary', {})
+        metrics = eval_results.get('metrics', {})
+
+        # 降温能力指标
+        matlab_data['cooling_mae'] = metrics.get('cooling_mae', 0)
+        matlab_data['cooling_rmse'] = metrics.get('cooling_rmse', 0)
+        matlab_data['cooling_max_error'] = metrics.get('cooling_max_error', 0)
+
+        # 工业控制指标
+        matlab_data['ISE'] = metrics.get('cooling_ise', 0)
+        matlab_data['IAE'] = metrics.get('cooling_iae', 0)
+        matlab_data['ITAE'] = metrics.get('cooling_itae', 0)
+
+        # 动态性能指标
+        matlab_data['settling_time'] = metrics.get('cooling_settling_time', 0)
+        matlab_data['peak_overshoot'] = metrics.get('cooling_overshoot', 0)
+        matlab_data['steady_state_error'] = metrics.get('cooling_steady_state_error', 0)
+
+        # 控制精度指标
+        matlab_data['control_precision_2C'] = metrics.get('cooling_precision_2c', 0)
+        matlab_data['control_precision_1C'] = metrics.get('cooling_precision_1c', 0)
+        matlab_data['temperature_stability'] = metrics.get('cooling_stability', 0)
+
+        # 能效指标
+        matlab_data['total_energy'] = metrics.get('total_energy', 0)
+        matlab_data['energy_efficiency_ratio'] = metrics.get('cooling_efficiency', 0)
+
+        # 综合性能指标
+        matlab_data['total_performance_index'] = metrics.get('total_cooling_performance_index', 0)
+        matlab_data['precision_score'] = metrics.get('precision_score', 0)
+        matlab_data['efficiency_score'] = metrics.get('efficiency_score', 0)
+        matlab_data['stability_score'] = metrics.get('stability_score', 0)
+        matlab_data['speed_score'] = metrics.get('speed_score', 0)
+
+        # RL指标
+        matlab_data['avg_reward'] = metrics.get('avg_reward', 0)
+
+        # Episode数据
+        episodes = eval_results.get('all_episodes', [])
+        if episodes and len(episodes) > 0:
+            ep1 = episodes[0]
+
+            # 温度数据
+            if 'temperatures' in ep1:
+                temps = np.array(ep1['temperatures'], dtype=np.float64)
+                matlab_data['episode1_true_temps'] = temps
+                print(f"  ✓ 温度数据: {len(temps)} 步")
+
+            # 降温数据
+            if 'actual_coolings' in ep1:
+                matlab_data['episode1_actual_coolings'] = \
+                    np.array(ep1['actual_coolings'], dtype=np.float64)
+                print(f"  ✓ 实际降温: {len(ep1['actual_coolings'])} 步")
+
+            if 'target_coolings' in ep1:
+                matlab_data['episode1_target_coolings'] = \
+                    np.array(ep1['target_coolings'], dtype=np.float64)
+                print(f"  ✓ 目标降温: {len(ep1['target_coolings'])} 步")
+
+            # 原始温度（降温前）
+            if 'temperatures' in ep1 and 'actual_coolings' in ep1:
+                temps = np.array(ep1['temperatures'])
+                coolings = np.array(ep1['actual_coolings'])
+                original_temps = temps + coolings
+                matlab_data['episode1_original_temps'] = original_temps.astype(np.float64)
+                print(f"  ✓ 原始温度（降温前）: {len(original_temps)} 步")
+
+            # 动作数据
+            if 'actions' in ep1:
+                matlab_data['episode1_actions'] = \
+                    np.array(ep1['actions'], dtype=np.float64)
+                print(f"  ✓ 动作数据: {len(ep1['actions'])} 步")
+
+        # 保存
+        output_file = os.path.join(self.output_dir, f'evaluation_{algorithm}.mat')
+        savemat(output_file, matlab_data)
+        print(f"  ✓ 已保存: evaluation_{algorithm}.mat")
+        print(f"    变量数: {len(matlab_data)}")
+
+    def export_all(self):
+        """导出所有数据"""
         print("\n" + "=" * 80)
-        print("详细数据统计".center(80))
+        print("开始导出MATLAB数据（修复版 - 支持training_stats）")
         print("=" * 80)
 
-        print(f"\n📊 基本信息:")
-        print(f"  总样本数(小时): {len(df):,}")
-        print(f"  时间跨度(天): {(df.index.max() - df.index.min()).days + 1:,}")
-        print(f"  时间范围: {df.index.min()} → {df.index.max()}")
-        print(f"  可训练Episodes(48h/个): {len(df) // 48:,}")
+        try:
+            # 1. 加载训练结果
+            training_data = self.load_training_results()
 
-        print(f"\n🌡️ 油温统计:")
-        print(f"  均值: {df['oil_temp'].mean():.2f}°C")
-        print(f"  标准差: {df['oil_temp'].std():.2f}°C")
-        print(f"  范围: [{df['oil_temp'].min():.2f}, {df['oil_temp'].max():.2f}]°C")
+            # 🔥 验证数据不为空
+            if training_data is None:
+                raise ValueError("训练数据加载后为None，请检查训练结果文件")
 
-        print(f"\n🌤️ 环境温度统计:")
-        print(f"  均值: {df['ambient_temp'].mean():.2f}°C")
-        print(f"  范围: [{df['ambient_temp'].min():.2f}, {df['ambient_temp'].max():.2f}]°C")
+            if not isinstance(training_data, dict):
+                raise TypeError(f"训练数据应该是字典，但得到: {type(training_data)}")
 
-        if 'predicted_temp' in df.columns:
-            print(f"\n🔮 预测温度统计:")
-            print(f"  均值: {df['predicted_temp'].mean():.2f}°C")
-            print(f"  与实际MAE: {np.mean(np.abs(df['predicted_temp'] - df['oil_temp'])):.2f}°C")
+            # 提取results
+            if 'results' in training_data:
+                results = training_data['results']
+                print(f"✓ 从'results'键提取数据")
+            else:
+                results = training_data
+                print(f"✓ 直接使用顶层数据")
 
-        print("=" * 80)
+            # 再次验证
+            if results is None or not isinstance(results, dict):
+                raise ValueError(f"results应该是字典，但得到: {type(results)}")
 
-    def save_processed_data(self, filename='processed_transformer_data.pkl'):
-        """保存处理后的数据"""
-        if self.merged_df is None:
-            return
+            # 2. 导出训练数据
+            print("\n【导出训练数据】")
+            for algorithm, algo_results in results.items():
+                try:
+                    self.export_training_data(algorithm, algo_results)
+                except Exception as e:
+                    print(f"  ✗ {algorithm} 训练数据导出失败: {e}")
+                    import traceback
+                    traceback.print_exc()
 
-        filepath = os.path.join(self.data_dir, filename)
-        with open(filepath, 'wb') as f:
-            pickle.dump({'processed_data': self.merged_df}, f)
+            # 3. 导出评估数据
+            print("\n【导出评估数据】")
+            try:
+                eval_data = self.load_evaluation_results()
+                if eval_data:
+                    if 'results' in eval_data:
+                        eval_results = eval_data['results']
+                    else:
+                        eval_results = eval_data
 
-        print(f"\n✓ 数据已保存到: {filepath}")
-
-    def load_all_and_process(self):
-        """一键加载和处理所有数据"""
-        print("=" * 80)
-        print("变压器智能冷却系统 - 真实数据加载".center(80))
-        print("=" * 80)
-
-        self.load_oil_temperature()
-        self.load_weather_data()
-        self.load_predicted_temperature()
-
-        merged_df = self.merge_all_data()
-
-        if merged_df is not None:
-            self.get_statistics()
-            self.save_processed_data()
+                    for algorithm, algo_eval in eval_results.items():
+                        try:
+                            self.export_evaluation_data(algorithm, algo_eval)
+                        except Exception as e:
+                            print(f"  ✗ {algorithm} 评估数据导出失败: {e}")
+                            import traceback
+                            traceback.print_exc()
+            except Exception as e:
+                print(f"  ⚠ 评估数据加载失败: {e}")
 
             print("\n" + "=" * 80)
-            print("✓ 数据加载完成!".center(80))
+            print("✓ MATLAB数据导出完成!")
             print("=" * 80)
+            print(f"输出目录: {self.output_dir}/")
 
-            return merged_df
-        else:
-            print("\n✗ 数据加载失败")
-            return None
+            print("\n可使用的MATLAB文件:")
+            mat_files = [f for f in os.listdir(self.output_dir) if f.endswith('.mat')]
+            for file in sorted(mat_files):
+                print(f"  • {file}")
+
+            print("\n💡 使用方法:")
+            print("  在MATLAB中运行:")
+            print("  >> generateImprovedSACDetailedFigures('matlab_data', 'results/figures/ImprovedSAC')")
+
+        except Exception as e:
+            print(f"\n✗ 导出失败: {e}")
+            import traceback
+            traceback.print_exc()
 
 
-def main():
-    """主函数"""
-    loader = TransformerDataLoader(data_dir='data')
-    data = loader.load_all_and_process()
-
-    if data is not None:
-        print("\n数据预览:")
-        print(data.head())
-
-    return data
+def export_matlab_data(results_dir: str = 'results', output_dir: str = 'matlab_data'):
+    """
+    便捷函数：导出MATLAB数据（修复版）
+    """
+    exporter = MatlabDataExporter(results_dir, output_dir)
+    exporter.export_all()
 
 
 if __name__ == "__main__":
-    main()
+    print("=" * 80)
+    print("修复说明".center(80))
+    print("=" * 80)
+
+    print("\n🔥 核心修复:")
+    print("1. ✅ 添加对 'training_stats' 键的检查")
+    print("   - 这是 trainer.py 修复版新增的数据结构")
+    print("   - 优先从这里提取训练损失、熵、alpha等数据")
+
+    print("\n2. ✅ 数据查找优先级:")
+    print("   优先级1: training_stats (修复版)")
+    print("   优先级2: agent.get_training_stats() (对象方法)")
+    print("   优先级3: training_data (旧版本兼容)")
+
+    print("\n3. ✅ 改进的数据提取:")
+    print("   - 使用 _extract_field() 方法支持多个字段名")
+    print("   - 添加 _verify_training_data() 验证数据完整性")
+    print("   - 更好的错误处理和日志输出")
+
+    print("\n4. ✅ 向后兼容:")
+    print("   - 仍然支持旧版本的数据结构")
+    print("   - 如果找不到数据，使用占位数据避免MATLAB报错")
+
+    print("\n" + "=" * 80)
+    print("使用方法".center(80))
+    print("=" * 80)
+
+    print("\n在Python中运行:")
+    print("  python compelte_data_lodar.py")
+
+    print("\n或在代码中调用:")
+    print("  from compelte_data_lodar import export_matlab_data")
+    print("  export_matlab_data(results_dir='results', output_dir='matlab_data')")
+
+    print("\n" + "=" * 80)
+
+    # 运行导出
+    export_matlab_data()

@@ -1,182 +1,52 @@
 """
-10kV变压器智能冷却控制系统 - 评估模块（完整修复版）
-修复指标计算逻辑，确保准确评估
+评估模块 - 完全使用CONFIG参数（降温能力评价）
+
+核心改进：
+1. ✅ 所有参数从CONFIG读取
+2. ✅ 完全基于降温能力评价
+3. ✅ 移除固定温度依赖
 """
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional
+from typing import Dict, List
 import os
 import pickle
 
 from environment import ImprovedTransformerCoolingEnv
 from config import CONFIG
-
-
-class ControlMetricsCalculator:
-    """控制性能指标计算器（独立版本）"""
-
-    @staticmethod
-    def calculate_temperature_control_metrics(
-            temperatures: np.ndarray,
-            target_temp: float = 50.0,
-            tolerance: float = 2.0
-    ) -> Dict[str, float]:
-        """
-        计算温度控制性能指标
-
-        Args:
-            temperatures: 控制后的温度序列
-            target_temp: 目标温度
-            tolerance: 允许偏差范围
-
-        Returns:
-            指标字典
-        """
-        # 计算温度偏差
-        temp_errors = temperatures - target_temp
-        abs_errors = np.abs(temp_errors)
-
-        # 基础统计指标
-        mae = np.mean(abs_errors)  # 平均绝对误差
-        rmse = np.sqrt(np.mean(temp_errors ** 2))  # 均方根误差
-        max_ae = np.max(abs_errors)  # 最大绝对误差
-
-        # 相对误差（MAPE）- 对于温度控制，用偏差占目标温度的比例
-        mape = np.mean(abs_errors / target_temp) * 100
-
-        # 温度达标率（在允许范围内的比例）
-        in_range_ratio = np.mean(abs_errors <= tolerance) * 100
-
-        # 温度稳定性指标
-        temp_std = np.std(temperatures)  # 标准差
-        temp_range = np.ptp(temperatures)  # 极差
-
-        # 超调指标
-        overshoot_ratio = np.mean(temperatures > (target_temp + tolerance)) * 100
-        undershoot_ratio = np.mean(temperatures < (target_temp - tolerance)) * 100
-
-        # 温度变化平滑度（连续时刻的温度变化）
-        if len(temperatures) > 1:
-            temp_changes = np.abs(np.diff(temperatures))
-            temp_smoothness = np.mean(temp_changes)  # 平均温度变化率
-        else:
-            temp_smoothness = 0.0
-
-        return {
-            'MAE': mae,
-            'RMSE': rmse,
-            'MAPE': mape,
-            'MaxAE': max_ae,
-            'temp_in_range_ratio': in_range_ratio,
-            'temp_std': temp_std,
-            'temp_range': temp_range,
-            'overshoot_ratio': overshoot_ratio,
-            'undershoot_ratio': undershoot_ratio,
-            'temp_smoothness': temp_smoothness,
-            'avg_temp': np.mean(temperatures),
-            'max_temp': np.max(temperatures),
-            'min_temp': np.min(temperatures)
-        }
-
-    @staticmethod
-    def calculate_reward_metrics(rewards: List[float]) -> Dict[str, float]:
-        """
-        计算强化学习回报指标
-
-        Args:
-            rewards: 回报序列
-
-        Returns:
-            指标字典
-        """
-        rewards_arr = np.array(rewards)
-
-        # 基础统计
-        total_reward = np.sum(rewards_arr)
-        avg_reward = np.mean(rewards_arr)
-        reward_std = np.std(rewards_arr)
-        reward_variance = np.var(rewards_arr)
-
-        # 收敛性分析（后50%的平均回报）
-        mid_point = len(rewards_arr) // 2
-        if mid_point > 0:
-            late_avg_reward = np.mean(rewards_arr[mid_point:])
-        else:
-            late_avg_reward = avg_reward
-
-        # 稳定性分析（后50%的标准差）
-        if mid_point > 0:
-            late_reward_std = np.std(rewards_arr[mid_point:])
-        else:
-            late_reward_std = reward_std
-
-        return {
-            'total_reward': total_reward,
-            'avg_reward': avg_reward,
-            'reward_std': reward_std,
-            'reward_variance': reward_variance,
-            'late_avg_reward': late_avg_reward,
-            'late_reward_std': late_reward_std,
-            'max_reward': np.max(rewards_arr),
-            'min_reward': np.min(rewards_arr)
-        }
-
-    @staticmethod
-    def calculate_action_metrics(actions: np.ndarray) -> Dict[str, float]:
-        """
-        计算动作性能指标
-
-        Args:
-            actions: 动作序列 (N, action_dim)
-
-        Returns:
-            指标字典
-        """
-        if len(actions) <= 1:
-            return {
-                'action_smoothness': 0.0,
-                'action_std': 0.0
-            }
-
-        # 动作平滑度（连续动作的变化）
-        action_changes = np.abs(np.diff(actions, axis=0))
-        action_smoothness = np.mean(action_changes)
-
-        # 动作标准差（每个维度）
-        action_std = np.mean(np.std(actions, axis=0))
-
-        return {
-            'action_smoothness': action_smoothness,
-            'action_std': action_std
-        }
+from metrics import MetricsCalculator
 
 
 class Evaluator:
-    """评估器（完整修复版）"""
+    """评估器（完全使用CONFIG）"""
 
     def __init__(self, env: ImprovedTransformerCoolingEnv, agent, algorithm_name: str):
         self.env = env
         self.agent = agent
         self.algorithm_name = algorithm_name
-        self.metrics_calc = ControlMetricsCalculator()
+
+        # ⭐ 使用metrics.py中的计算器（不需要target_temp）
+        self.metrics_calc = MetricsCalculator()
 
     def evaluate_episode(self, deterministic: bool = True) -> Dict:
         """
-        评估一个episode
+        评估一个episode（使用完整的降温能力评价体系）
 
         Args:
             deterministic: 是否使用确定性策略
 
         Returns:
-            episode数据字典（包含所有指标）
+            包含完整指标的字典
         """
         state = self.env.reset()
 
         temperatures = []  # 实际温度序列
         rewards = []
         actions = []
-        log_probs = []
+        # 🔥 降温数据
+        actual_coolings = []
+        target_coolings = []
 
         done = False
         step = 0
@@ -184,19 +54,20 @@ class Evaluator:
         while not done:
             # 选择动作
             if self.algorithm_name == 'ppo':
-                action, log_prob, _ = self.agent.select_action(state, evaluate=deterministic)
-                log_probs.append(log_prob)
+                action, _, _ = self.agent.select_action(state, evaluate=deterministic)
             else:
                 action = self.agent.select_action(state, evaluate=deterministic)
-                log_probs.append(0.0)
 
             # 执行动作
             next_state, reward, done, info = self.env.step(action)
 
             # 收集数据
-            temperatures.append(info['oil_temp'])  # 当前油温
+            temperatures.append(info['oil_temp'])
             rewards.append(reward)
             actions.append(action.copy())
+            # 🔥 收集降温数据
+            actual_coolings.append(info.get('actual_cooling', 0))
+            target_coolings.append(info.get('target_cooling', 0))
 
             state = next_state
             step += 1
@@ -204,49 +75,47 @@ class Evaluator:
         # 转换为numpy数组
         temperatures = np.array(temperatures)
         actions = np.array(actions)
-        log_probs = np.array(log_probs)
+        actual_coolings = np.array(actual_coolings)
+        target_coolings = np.array(target_coolings)
 
-        # ⭐ 计算温度控制指标␊
-        temp_metrics = self.metrics_calc.calculate_temperature_control_metrics(
-        temperatures = temperatures,
-        target_temp = self.env.target_temp,
-        tolerance = CONFIG.env.TEMP_TOLERANCE
+        # ⭐⭐⭐ 核心：使用metrics.py计算所有指标 ⭐⭐⭐
+        all_metrics = self.metrics_calc.calculate_all_metrics(
+            temperatures=temperatures,
+            rewards=rewards,
+            actions=actions,
+            actual_coolings=actual_coolings,  # 🔥 传入降温数据
+            target_coolings=target_coolings  # 🔥 传入降温数据
         )
-
-        # ⭐ 计算回报指标
-        reward_metrics = self.metrics_calc.calculate_reward_metrics(rewards)
-
-        # ⭐ 计算动作指标
-        action_metrics = self.metrics_calc.calculate_action_metrics(actions)
-
-        # 合并所有指标
-        all_metrics = {**temp_metrics, **reward_metrics, **action_metrics}
 
         return {
             'temperatures': temperatures,
             'rewards': rewards,
             'actions': actions,
-            'log_probs': log_probs,
+            'actual_coolings': actual_coolings,
+            'target_coolings': target_coolings,
             'metrics': all_metrics,
             'total_reward': sum(rewards),
             'avg_temp': np.mean(temperatures),
             'max_temp': np.max(temperatures),
             'min_temp': np.min(temperatures),
             'steps': step,
-            'target_temp': self.env.target_temp
         }
 
-    def evaluate_multiple_episodes(self, num_episodes: int = 10, verbose: bool = True) -> Dict:
+    def evaluate_multiple_episodes(self, num_episodes: int = None, verbose: bool = True) -> Dict:
         """
-        评估多个episodes
+        评估多个episodes（使用CONFIG参数）
 
         Args:
-            num_episodes: 评估episode数量
+            num_episodes: 评估episode数量（None则从CONFIG读取）
             verbose: 是否打印进度
 
         Returns:
             汇总结果
         """
+        # 🔥 从CONFIG读取
+        if num_episodes is None:
+            num_episodes = CONFIG.train.EVAL_EPISODES
+
         all_episodes = []
         all_metrics = []
 
@@ -261,9 +130,10 @@ class Evaluator:
         # 计算所有指标的平均值和标准差
         metrics_summary = {}
         for key in all_metrics[0].keys():
-            values = [m[key] for m in all_metrics]
-            metrics_summary[key] = np.mean(values)
-            metrics_summary[f'{key}_std'] = np.std(values)
+            values = [m[key] for m in all_metrics if key in m]
+            if values:
+                metrics_summary[key] = np.mean(values)
+                metrics_summary[f'{key}_std'] = np.std(values)
 
         # 汇总统计
         summary = {
@@ -273,38 +143,46 @@ class Evaluator:
             'max_temp': np.max([ep['max_temp'] for ep in all_episodes]),
             'min_temp': np.min([ep['min_temp'] for ep in all_episodes]),
             'episodes': all_episodes,
-            'metrics': metrics_summary
+            'metrics': metrics_summary,
+            'num_eval_episodes': num_episodes  # 🔥 记录评估episode数
         }
 
         return summary
 
 
 class MultiAlgorithmEvaluator:
-    """多算法评估器"""
+    """多算法评估器（完全使用CONFIG）"""
 
     def __init__(self):
         self.results = {}
+        self.metrics_calc = MetricsCalculator()
 
     def evaluate_algorithm(
             self,
             env: ImprovedTransformerCoolingEnv,
             agent,
             algorithm_name: str,
-            num_episodes: int = 10
+            num_episodes: int = None
     ) -> Dict:
         """
-        评估单个算法
+        评估单个算法（使用CONFIG参数）
 
         Args:
             env: 环境
             agent: 智能体
             algorithm_name: 算法名称
-            num_episodes: 评估episode数量
+            num_episodes: 评估episode数量（None则从CONFIG读取）
 
         Returns:
             评估结果
         """
+        # 🔥 从CONFIG读取
+        if num_episodes is None:
+            num_episodes = CONFIG.train.EVAL_EPISODES
+
         print(f"\n🔍 评估算法: {algorithm_name.upper()}")
+        print(f"  评估Episodes: {num_episodes} (来自CONFIG)")
+
         evaluator = Evaluator(env, agent, algorithm_name)
 
         # 评估多个episodes
@@ -315,22 +193,41 @@ class MultiAlgorithmEvaluator:
             'algorithm': algorithm_name,
             'summary': summary,
             'metrics': summary['metrics'],
-            'all_episodes': summary['episodes']
+            'all_episodes': summary['episodes'],
+            'config_info': {  # 🔥 保存CONFIG信息
+                'eval_episodes': num_episodes,
+                'best_criterion': CONFIG.metrics.BEST_MODEL_CRITERION,
+            }
         }
 
         self.results[algorithm_name] = result
 
-        # 打印关键指标
+        # 打印关键指标（降温能力优先）
         m = summary['metrics']
-        print(f"  ✓ MAE: {m['MAE']:.2f}°C | RMSE: {m['RMSE']:.2f}°C | "
-              f"达标率: {m['temp_in_range_ratio']:.1f}% | "
-              f"平均回报: {m['avg_reward']:.1f}")
+        print(f"\n  🔥🔥🔥 降温能力指标（核心）:")
+        print(f"    {CONFIG.metrics.BEST_MODEL_CRITERION}:  {m.get('cooling_mae', 0):8.4f}°C  👈 主要评价")
+
+        # 显示所有配置的精度阈值
+        for threshold in CONFIG.env.COOLING_PRECISION_THRESHOLDS:
+            key = f'cooling_precision_{int(threshold)}c'
+            print(f"    精度±{int(threshold)}°C:        {m.get(key, 0):8.2f}%")
+
+        print(f"    总降温量:           {m.get('total_cooling', 0):8.2f}°C")
+        print(f"    降温效率:           {m.get('cooling_efficiency', 0):8.4f}")
+
+        print(f"\n  📊 温度相关指标（参考）:")
+        print(f"    温度波动范围:       {m.get('temperature_range', 0):8.2f}°C")
+        print(f"    温度标准差:         {m.get('temperature_std', 0):8.4f}°C")
+
+        print(f"\n  💰 强化学习指标:")
+        print(f"    平均回报:           {m.get('avg_reward', 0):8.2f}")
+        print(f"    回报标准差:         {m.get('reward_std', 0):8.4f}")
 
         return result
 
     def compare_algorithms(self, save_table: bool = True) -> pd.DataFrame:
         """
-        对比所有算法
+        对比所有算法（使用CONFIG参数）
 
         Args:
             save_table: 是否保存表格
@@ -342,22 +239,34 @@ class MultiAlgorithmEvaluator:
             raise ValueError("No evaluation results available.")
 
         comparison_data = []
+
+        # 🔥 使用CONFIG中定义的指标
         for algo_name, result in self.results.items():
             metrics = result['metrics']
 
             row = {
                 'Algorithm': algo_name.upper().replace('_', ' '),
-                'MAE (°C)': metrics['MAE'],
-                'RMSE (°C)': metrics['RMSE'],
-                'MAPE (%)': metrics['MAPE'],
-                'MaxAE (°C)': metrics['MaxAE'],
-                'Temp In Range (%)': metrics['temp_in_range_ratio'],
-                'Temp Std (°C)': metrics['temp_std'],
-                'Overshoot (%)': metrics['overshoot_ratio'],
-                'Avg Reward': metrics['avg_reward'],
-                'Reward Std': metrics['reward_std'],
-                'Action Smoothness': metrics['action_smoothness']
+                # 🔥 降温能力指标（核心）
+                f'{CONFIG.metrics.BEST_MODEL_CRITERION} (°C)': metrics.get('cooling_mae', 0),
             }
+
+            # 添加所有配置的精度阈值
+            for threshold in CONFIG.env.COOLING_PRECISION_THRESHOLDS:
+                key = f'cooling_precision_{int(threshold)}c'
+                row[f'Precision ±{int(threshold)}°C (%)'] = metrics.get(key, 0)
+
+            # 其他降温指标
+            row.update({
+                'Total Cooling (°C)': metrics.get('total_cooling', 0),
+                'Cooling Efficiency': metrics.get('cooling_efficiency', 0),
+                'Cooling Stability': metrics.get('cooling_stability', 0),
+                # 温度指标（参考）
+                'Temp Range (°C)': metrics.get('temperature_range', 0),
+                'Temp Std (°C)': metrics.get('temperature_std', 0),
+                # RL指标
+                'Avg Reward': metrics.get('avg_reward', 0),
+                'Reward Std': metrics.get('reward_std', 0),
+            })
 
             comparison_data.append(row)
 
@@ -368,88 +277,97 @@ class MultiAlgorithmEvaluator:
 
         return df
 
-    def save_comparison_table(self, df: pd.DataFrame, filename: str = 'algorithm_comparison.csv'):
-        """保存对比表格"""
+    def save_comparison_table(self, df: pd.DataFrame, filename: str = 'algorithm_comparison_cooling_based.csv'):
+        """保存完整对比表格"""
         os.makedirs(CONFIG.vis.TABLE_DIR, exist_ok=True)
         filepath = os.path.join(CONFIG.vis.TABLE_DIR, filename)
         df.to_csv(filepath, index=False, float_format='%.4f')
         print(f"\n✓ 对比表格已保存到: {filepath}")
 
     def print_detailed_results(self):
-        """打印详细结果"""
-        print("\n" + "=" * 90)
-        print("详细评估结果".center(90))
-        print("=" * 90)
+        """打印详细结果（使用CONFIG格式）"""
+        print("\n" + "=" * 100)
+        print("详细评估结果（降温能力评价体系 - 来自CONFIG）".center(100))
+        print("=" * 100)
+        print(f"评估标准: {CONFIG.metrics.BEST_MODEL_CRITERION} (主要)")
+        print(f"           {CONFIG.metrics.SECONDARY_CRITERION} (次要)")
+        print(f"           {CONFIG.metrics.TERTIARY_CRITERION} (第三)")
+        print("=" * 100)
 
         for algo_name, result in self.results.items():
             print(f"\n算法: {algo_name.upper()}")
-            print("-" * 90)
+            print("-" * 100)
 
             metrics = result['metrics']
+            config_info = result.get('config_info', {})
 
-            # 温度控制性能
-            print("\n📊 温度控制性能:")
-            print(f"  平均温度偏差 (MAE):        {metrics['MAE']:.4f} °C")
-            print(f"  均方根偏差 (RMSE):         {metrics['RMSE']:.4f} °C")
-            print(f"  相对误差 (MAPE):          {metrics['MAPE']:.2f} %")
-            print(f"  最大偏差 (MaxAE):         {metrics['MaxAE']:.4f} °C")
-            print(f"  温度达标率:                {metrics['temp_in_range_ratio']:.2f} %")
-            print(f"  温度标准差:                {metrics['temp_std']:.4f} °C")
-            print(f"  超调比例:                  {metrics['overshoot_ratio']:.2f} %")
-            print(f"  欠调比例:                  {metrics['undershoot_ratio']:.2f} %")
-            print(f"  温度平滑度:                {metrics['temp_smoothness']:.4f} °C/step")
+            print(f"配置: 评估{config_info.get('eval_episodes', 'N/A')}个episodes")
 
-            # 控制效果统计
-            print("\n📈 控制效果统计:")
-            print(f"  平均温度:                  {metrics['avg_temp']:.2f} °C")
-            print(f"  温度范围:                  [{metrics['min_temp']:.2f}, {metrics['max_temp']:.2f}] °C")
-            print(f"  温度极差:                  {metrics['temp_range']:.2f} °C")
+            # 使用metrics.py的打印格式
+            self.metrics_calc.print_metrics_summary(metrics)
 
-            # 强化学习性能
-            print("\n🎯 强化学习性能:")
-            print(f"  平均回报:                  {metrics['avg_reward']:.2f}")
-            print(f"  回报标准差:                {metrics['reward_std']:.4f}")
-            print(f"  后期平均回报:              {metrics['late_avg_reward']:.2f}")
-            print(f"  后期回报标准差:            {metrics['late_reward_std']:.4f}")
-
-            # 动作性能
-            print("\n🎮 动作性能:")
-            print(f"  动作平滑度:                {metrics['action_smoothness']:.4f}")
-            print(f"  动作标准差:                {metrics['action_std']:.4f}")
-
-    def save_all_results(self, filename: str = 'evaluation_results.pkl'):
+    def save_all_results(self, filename: str = 'evaluation_results_cooling_based.pkl'):
         """保存所有评估结果"""
         os.makedirs(CONFIG.vis.RESULTS_DIR, exist_ok=True)
         filepath = os.path.join(CONFIG.vis.RESULTS_DIR, filename)
-        with open(filepath, 'wb') as f:
-            pickle.dump(self.results, f)
-        print(f"✓ 评估结果已保存到: {filepath}")
 
-    def load_all_results(self, filename: str = 'evaluation_results.pkl'):
+        # 包含CONFIG信息
+        save_data = {
+            'results': self.results,
+            'config_snapshot': {
+                'eval_episodes': CONFIG.train.EVAL_EPISODES,
+                'best_criterion': CONFIG.metrics.BEST_MODEL_CRITERION,
+                'secondary_criterion': CONFIG.metrics.SECONDARY_CRITERION,
+                'tertiary_criterion': CONFIG.metrics.TERTIARY_CRITERION,
+                'cooling_precision_thresholds': CONFIG.env.COOLING_PRECISION_THRESHOLDS,
+            }
+        }
+
+        with open(filepath, 'wb') as f:
+            pickle.dump(save_data, f)
+        print(f"✓ 评估结果已保存到: {filepath}")
+        print("  （包含完整CONFIG快照）")
+
+    def load_all_results(self, filename: str = 'evaluation_results_cooling_based.pkl'):
         """加载评估结果"""
         filepath = os.path.join(CONFIG.vis.RESULTS_DIR, filename)
         with open(filepath, 'rb') as f:
-            self.results = pickle.load(f)
-        print(f"✓ 评估结果已加载: {filepath}")
+            save_data = pickle.load(f)
+
+        self.results = save_data.get('results', save_data)  # 兼容旧格式
+
+        if 'config_snapshot' in save_data:
+            print(f"✓ 评估结果已加载: {filepath}")
+            print("  CONFIG快照:")
+            for key, value in save_data['config_snapshot'].items():
+                print(f"    {key}: {value}")
+        else:
+            print(f"✓ 评估结果已加载: {filepath} (旧格式，无CONFIG快照)")
 
 
-def generate_evaluation_csv_files(results: Dict, save_dir: str = 'results'):
-    """生成评估相关的CSV文件"""
+def generate_evaluation_csv_files(results: Dict, save_dir: str = None):
+    """生成评估相关的CSV文件（使用CONFIG）"""
+    if save_dir is None:
+        save_dir = CONFIG.vis.RESULTS_DIR
+
     os.makedirs(save_dir, exist_ok=True)
 
     for algo_name, algo_results in results.items():
         episodes = algo_results['all_episodes']
 
+        # 只保存前3个episode的详细数据
         for ep_idx, episode in enumerate(episodes[:3]):
-            # 温度控制CSV
-            target_temp = episode.get('target_temp', CONFIG.env.TARGET_TEMP)
-            temp_df = pd.DataFrame({
+            # 温度和降温数据CSV
+            data_df = pd.DataFrame({
                 'step': range(len(episode['temperatures'])),
                 'temperature': episode['temperatures'],
-                'target_temp': target_temp,
-                'upper_bound': target_temp + CONFIG.env.TEMP_TOLERANCE,
-                'lower_bound': target_temp - CONFIG.env.TEMP_TOLERANCE
+                'actual_cooling': episode['actual_coolings'],
+                'target_cooling': episode['target_coolings'],
             })
+            data_df.to_csv(
+                os.path.join(save_dir, f'{algo_name}_temp_cooling_ep{ep_idx}.csv'),
+                index=False
+            )
 
             # 控制动作CSV
             action_df = pd.DataFrame(
@@ -462,76 +380,29 @@ def generate_evaluation_csv_files(results: Dict, save_dir: str = 'results'):
                 index=False
             )
 
-        print(f"✓ {algo_name} 评估CSV文件已生成")
-
-
-def generate_metrics_table(results: Dict, save_dir: str = 'tables'):
-    """生成指标对比表格"""
-    os.makedirs(save_dir, exist_ok=True)
-
-    # 控制性能指标表
-    control_data = []
-    for algo_name, algo_results in results.items():
-        m = algo_results['metrics']
-        control_data.append({
-            'Algorithm': algo_name.upper().replace('_', ' '),
-            'MAE (°C)': m['MAE'],
-            'RMSE (°C)': m['RMSE'],
-            'MAPE (%)': m['MAPE'],
-            'MaxAE (°C)': m['MaxAE'],
-            'Temp In Range (%)': m['temp_in_range_ratio'],
-            'Temp Std (°C)': m['temp_std'],
-            'Overshoot (%)': m['overshoot_ratio']
-        })
-
-    control_df = pd.DataFrame(control_data)
-    control_df.to_csv(
-        os.path.join(save_dir, 'control_performance_metrics.csv'),
-        index=False,
-        float_format='%.4f'
-    )
-
-    # RL性能指标表
-    rl_data = []
-    for algo_name, algo_results in results.items():
-        m = algo_results['metrics']
-        rl_data.append({
-            'Algorithm': algo_name.upper().replace('_', ' '),
-            'Avg Reward': m['avg_reward'],
-            'Reward Std': m['reward_std'],
-            'Late Avg Reward': m['late_avg_reward'],
-            'Action Smoothness': m['action_smoothness']
-        })
-
-    rl_df = pd.DataFrame(rl_data)
-    rl_df.to_csv(
-        os.path.join(save_dir, 'rl_performance_metrics.csv'),
-        index=False,
-        float_format='%.4f'
-    )
-
-    print(f"✓ 指标表格已保存到: {save_dir}")
+    print(f"✓ 评估CSV文件已生成到: {save_dir}")
 
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("评估模块测试（完整修复版）".center(70))
-    print("=" * 70)
+    print("=" * 90)
+    print("评估模块测试（完全使用CONFIG参数）".center(90))
+    print("=" * 90)
 
-    print("\n✅ 关键改进:")
-    print("  1. ✅ 移除对不存在的 'predicted_temp' 的依赖")
-    print("  2. ✅ 直接计算温度与目标温度(50°C)的偏差")
-    print("  3. ✅ 独立实现指标计算器，避免依赖外部模块")
-    print("  4. ✅ 新增温度达标率、超调率、平滑度等实用指标")
-    print("  5. ✅ 详细的指标解释和可视化准备")
+    print("\n✅ 核心改进:")
+    print("  1. ✅ 所有参数从CONFIG读取")
+    print("  2. ✅ EVAL_EPISODES: CONFIG.train.EVAL_EPISODES")
+    print("  3. ✅ 最佳模型判定: CONFIG.metrics.BEST_MODEL_CRITERION")
+    print("  4. ✅ 降温精度阈值: CONFIG.env.COOLING_PRECISION_THRESHOLDS")
+    print("  5. ✅ 完全移除固定温度依赖")
+    print("  6. ✅ 使用MetricsCalculator（不需要target_temp）")
 
-    print("\n📊 指标解释:")
-    print("  • MAE/RMSE: 越小越好（理想值 <5°C）")
-    print("  • 温度达标率: 越高越好（目标 >90%）")
-    print("  • 温度标准差: 越小越好（表示控制稳定）")
-    print("  • 超调率: 越低越好（避免温度过高）")
-    print("  • 动作平滑度: 越小越好（避免频繁调整）")
+    print("\n📊 CONFIG参数展示:")
+    print(f"  EVAL_EPISODES = {CONFIG.train.EVAL_EPISODES}")
+    print(f"  BEST_MODEL_CRITERION = '{CONFIG.metrics.BEST_MODEL_CRITERION}'")
+    print(f"  SECONDARY_CRITERION = '{CONFIG.metrics.SECONDARY_CRITERION}'")
+    print(f"  TERTIARY_CRITERION = '{CONFIG.metrics.TERTIARY_CRITERION}'")
+    print(f"  COOLING_PRECISION_THRESHOLDS = {CONFIG.env.COOLING_PRECISION_THRESHOLDS}")
 
-    print("\n" + "=" * 70)
-    print("✓ 评估模块准备就绪".center(70))
-    print("=" * 70)
+    print("\n" + "=" * 90)
+    print("✓ 评估模块修复完成（完全使用CONFIG）".center(90))
+    print("=" * 90)

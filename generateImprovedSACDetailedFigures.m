@@ -1,5 +1,11 @@
 function generateImprovedSACDetailedFigures(resultsPath, outputPath)
-% 为 Improved SAC 算法生成详细的单独分析图表（修复版）
+% 为 Improved SAC 算法生成详细的单独分析图表（基于降温能力评价）
+%
+% 🔥 修复内容：
+% 1. ✅ 修复 nSteps 未定义错误
+% 2. ✅ 添加数据有效性检查
+% 3. ✅ 改善错误处理
+%
 % 输入:
 %   resultsPath - Python导出的matlab_data路径
 %   outputPath  - 输出图表路径
@@ -22,31 +28,53 @@ if ~exist([outputPath '/English'], 'dir')
     mkdir([outputPath '/English']);
 end
 
-fprintf('\n========== 生成 Improved SAC 详细分析图表（修复版）==========\n');
+fprintf('\n========== 生成 Improved SAC 详细分析图表（降温能力评价）==========\n');
 
 % 加载数据
 try
     data = loadImprovedSACDataFromPython(resultsPath);
     fprintf('✓ Python数据加载成功\n');
 catch ME
-    warning(['数据加载失败: ' ME.message '，使用模拟数据']);
-    data = generateSimulatedData();
+    error(['数据加载失败: ' ME.message]);
 end
 
 % 生成各类图表
 try
+    fprintf('\n生成图表序列...\n');
+    
+    % 1. 训练动态特性
+    fprintf('  1/8 训练动态特性...\n');
     generateTrainingDynamics(data, outputPath);
-    generatePolicyAnalysis(data, outputPath);
-    generateValueFunctionAnalysis(data, outputPath);
-    generateEntropyAnalysis(data, outputPath);
-    generateActionDistribution(data, outputPath);
+    
+    % 2. 降温能力分析（核心）
+    fprintf('  2/8 降温能力分析...\n');
+    generateCoolingPerformanceAnalysis(data, outputPath);
+    
+    % 3. 温度控制效果
+    fprintf('  3/8 温度控制效果...\n');
     generateTemperatureControl(data, outputPath);
-    generateRewardDecomposition(data, outputPath);
+    
+    % 4. 降温时序分析
+    fprintf('  4/8 降温时序分析...\n');
+    generateCoolingTimeSeries(data, outputPath);
+    
+    % 5. 控制动作分析
+    fprintf('  5/8 控制动作分析...\n');
+    generateActionAnalysis(data, outputPath);
+    
+    % 6. 学习曲线
+    fprintf('  6/8 学习曲线...\n');
     generateLearningCurves(data, outputPath);
-    generateExplorationAnalysis(data, outputPath);
+    
+    % 7. 熵调节分析
+    fprintf('  7/8 熵调节分析...\n');
+    generateEntropyAnalysis(data, outputPath);
+    
+    % 8. 综合性能指标
+    fprintf('  8/8 综合性能指标...\n');
     generatePerformanceMetrics(data, outputPath);
     
-    fprintf('✓ Improved SAC 详细分析图表生成完成！\n');
+    fprintf('\n✓ Improved SAC 详细分析图表生成完成！\n');
     fprintf('  输出路径: %s\n', outputPath);
 catch ME
     warning(['图表生成出错: ' ME.message]);
@@ -56,7 +84,7 @@ catch ME
 end
 end
 
-%% ========== 数据加载函数（修复版）==========
+%% ========== 数据加载函数 ==========
 function data = loadImprovedSACDataFromPython(resultsPath)
     data = struct();
     
@@ -65,57 +93,43 @@ function data = loadImprovedSACDataFromPython(resultsPath)
     if exist(trainFile, 'file')
         trainData = load(trainFile);
         
-        % 构建训练统计数据
         data.stats = struct();
         
-        % ✓ 修复：使用episode_rewards作为Q值的替代
         if isfield(trainData, 'episode_rewards')
             data.stats.episodeReward = double(trainData.episode_rewards(:)');
-            % 使用episode_rewards作为Q值的代理
-            data.stats.qValue = double(trainData.episode_rewards(:)');
+            data.stats.qValue = data.stats.episodeReward;
             nEpisodes = length(data.stats.qValue);
         else
-            nEpisodes = 200;
-            data.stats.qValue = -5000 + 3500 * (1 - exp(-(1:nEpisodes)/100));
-            data.stats.episodeReward = data.stats.qValue;
+            nEpisodes = 0;
         end
         
-        % Critic损失
         if isfield(trainData, 'critic_losses') && ~isempty(trainData.critic_losses)
             data.stats.criticLoss = double(trainData.critic_losses(:)');
         else
-            data.stats.criticLoss = 2 * exp(-(1:nEpisodes)/100) + 0.1 * randn(1, nEpisodes);
+            data.stats.criticLoss = [];
         end
         
-        % Actor损失
         if isfield(trainData, 'actor_losses') && ~isempty(trainData.actor_losses)
             data.stats.actorLoss = double(trainData.actor_losses(:)');
         else
-            data.stats.actorLoss = 0.5 * exp(-(1:nEpisodes)/120) + 0.05 * randn(1, nEpisodes);
+            data.stats.actorLoss = [];
         end
         
-        % 熵
         if isfield(trainData, 'entropies') && ~isempty(trainData.entropies)
             data.stats.entropy = double(trainData.entropies(:)');
         else
-            data.stats.entropy = 2 * exp(-(1:nEpisodes)/200);
+            data.stats.entropy = [];
         end
         
-        % Alpha
         if isfield(trainData, 'alphas') && ~isempty(trainData.alphas)
             data.stats.alpha = double(trainData.alphas(:)');
         else
-            data.stats.alpha = 0.3 * ones(1, nEpisodes);
+            data.stats.alpha = [];
         end
-        
-        % TD误差（模拟）
-        data.stats.tdError = 10 * exp(-(1:nEpisodes)/150) + randn(1, nEpisodes);
         
         fprintf('  ✓ 加载训练数据: %d episodes\n', nEpisodes);
     else
-        warning('未找到训练文件: %s', trainFile);
-        data = generateSimulatedData();
-        return;
+        error('未找到训练文件: %s', trainFile);
     end
     
     % 2. 加载评估数据
@@ -123,201 +137,512 @@ function data = loadImprovedSACDataFromPython(resultsPath)
     if exist(evalFile, 'file')
         evalData = load(evalFile);
         
-        % ✓ 修复：温度控制数据
+        % 🔥 修复：初始化evaluation结构和nSteps
+        data.evaluation = struct();
+        data.nSteps = 0;  % 默认值
+        
+        % 温度数据
         if isfield(evalData, 'episode1_true_temps')
             actualTemps = double(evalData.episode1_true_temps(:));
-            nSteps = length(actualTemps);
-            % ✓ 修复：时间改为小时
-            timeVec = (0:nSteps-1)' * 0.5; % 每步0.5小时
-            setpointVec = 50 * ones(nSteps, 1);
+            data.nSteps = length(actualTemps);  % 🔥 保存到data结构中
+            timeVec = (0:data.nSteps-1)' * 0.5;
             
-            % 创建table
-            data.evaluation = table(timeVec, setpointVec, actualTemps, ...
-                'VariableNames', {'Time', 'Setpoint', 'Actual'});
-            
-            fprintf('  ✓ 加载评估数据: %d steps\n', nSteps);
-        else
-            % 模拟评估数据
-            nSteps = 48;
-            timeVec = (0:nSteps-1)' * 0.5;
-            setpointVec = 50 * ones(nSteps, 1);
-            actualTemps = setpointVec + 2*randn(nSteps, 1);
-            
-            data.evaluation = table(timeVec, setpointVec, actualTemps, ...
-                'VariableNames', {'Time', 'Setpoint', 'Actual'});
+            data.evaluation.Time = timeVec;
+            data.evaluation.Actual = actualTemps;
         end
+        
+        % 降温数据
+        if isfield(evalData, 'episode1_actual_coolings')
+            data.evaluation.ActualCooling = double(evalData.episode1_actual_coolings(:));
+        end
+        
+        if isfield(evalData, 'episode1_target_coolings')
+            data.evaluation.TargetCooling = double(evalData.episode1_target_coolings(:));
+        end
+        
+        % 动作数据
+        if isfield(evalData, 'episode1_actions')
+            actionMat = double(evalData.episode1_actions);
+            % 🔥 修复：确保是正确的维度 (nSteps x 3)
+            if size(actionMat, 1) < size(actionMat, 2)
+                actionMat = actionMat';
+            end
+            data.evaluation.Actions = actionMat;
+        end
+
+        % ===== 计算完整的metrics =====
+        data.metrics = struct();
+        
+        % 基础误差指标
+        if isfield(evalData, 'cooling_mae')
+            data.metrics.mae = double(evalData.cooling_mae);
+        elseif isfield(evalData, 'MAE')
+            data.metrics.mae = double(evalData.MAE);
+        else
+            data.metrics.mae = 0;
+        end
+        
+        if isfield(evalData, 'cooling_rmse')
+            data.metrics.rmse = double(evalData.cooling_rmse);
+        elseif isfield(evalData, 'RMSE')
+            data.metrics.rmse = double(evalData.RMSE);
+        else
+            data.metrics.rmse = 0;
+        end
+        
+        if isfield(evalData, 'cooling_max_error')
+            data.metrics.maxError = double(evalData.cooling_max_error);
+        elseif isfield(evalData, 'MaxAE')
+            data.metrics.maxError = double(evalData.MaxAE);
+        else
+            data.metrics.maxError = 0;
+        end
+        
+        % 工业控制指标
+        data.metrics.ise = getFieldOrDefault(evalData, 'ISE', 0);
+        data.metrics.iae = getFieldOrDefault(evalData, 'IAE', 0);
+        data.metrics.itae = getFieldOrDefault(evalData, 'ITAE', 0);
+        
+        % 动态性能指标
+        data.metrics.settling_time = getFieldOrDefault(evalData, 'settling_time', 0);
+        data.metrics.overshoot = getFieldOrDefault(evalData, 'peak_overshoot', 0);
+        data.metrics.steadyStateError = getFieldOrDefault(evalData, 'steady_state_error', 0);
+        
+        % 控制精度指标
+        data.metrics.precision_2c = getFieldOrDefault(evalData, 'control_precision_2C', 0);
+        data.metrics.precision_1c = getFieldOrDefault(evalData, 'control_precision_1C', 0);
+        data.metrics.tempStability = getFieldOrDefault(evalData, 'temperature_stability', 0);
+        
+        % 能效指标
+        data.metrics.totalEnergy = getFieldOrDefault(evalData, 'total_energy', 0);
+        data.metrics.energyEfficiency = getFieldOrDefault(evalData, 'energy_efficiency_ratio', 0);
+        
+        % 综合性能指标
+        data.metrics.performanceIndex = getFieldOrDefault(evalData, 'total_performance_index', 0);
+        data.metrics.precisionScore = getFieldOrDefault(evalData, 'precision_score', 0);
+        data.metrics.efficiencyScore = getFieldOrDefault(evalData, 'efficiency_score', 0);
+        data.metrics.stabilityScore = getFieldOrDefault(evalData, 'stability_score', 0);
+        data.metrics.speedScore = getFieldOrDefault(evalData, 'speed_score', 0);
+        
+        fprintf('  ✓ 加载评估数据: %d 时间步\n', data.nSteps);
     else
         warning('未找到评估文件: %s', evalFile);
-        nSteps = 48;
-        timeVec = (0:nSteps-1)' * 0.5;
-        setpointVec = 50 * ones(nSteps, 1);
-        actualTemps = setpointVec + 2*randn(nSteps, 1);
-        
-        data.evaluation = table(timeVec, setpointVec, actualTemps, ...
-            'VariableNames', {'Time', 'Setpoint', 'Actual'});
     end
 end
 
-function data = generateSimulatedData()
-    episodes = 200;
-    data = struct();
-    
-    % 训练统计
-    data.stats = struct();
-    data.stats.criticLoss = 2 * exp(-(1:episodes)/100) + 0.1 * randn(1, episodes);
-    data.stats.actorLoss = 0.5 * exp(-(1:episodes)/120) + 0.05 * randn(1, episodes);
-    data.stats.entropy = 2 * exp(-(1:episodes)/200);
-    data.stats.alpha = 0.3 * ones(1, episodes);
-    data.stats.qValue = -5000 + 3500 * (1 - exp(-(1:episodes)/100)) + 100 * randn(1, episodes);
-    data.stats.tdError = 10 * exp(-(1:episodes)/150);
-    data.stats.episodeReward = data.stats.qValue;
-    
-    % 评估数据
-    nSteps = 48;
-    timeVec = (0:nSteps-1)' * 0.5;
-    setpointVec = 50 * ones(nSteps, 1);
-    actualVec = setpointVec + 2*randn(nSteps, 1);
-    
-    data.evaluation = table(timeVec, setpointVec, actualVec, ...
-        'VariableNames', {'Time', 'Setpoint', 'Actual'});
+function value = getFieldOrDefault(s, fieldName, defaultValue)
+    % 辅助函数：获取字段值或默认值
+    if isfield(s, fieldName)
+        value = double(s.(fieldName));
+    else
+        value = defaultValue;
+    end
 end
 
 %% ========== 图表生成函数 ==========
 
 function generateTrainingDynamics(data, outputPath)
-    fprintf('生成训练动态特性图表...\n');
+    % 训练动态特性
     try
-        fig = figure('Position', [100, 100, 1400, 900], 'Visible', 'off');
+        if ~isfield(data, 'stats') || ~isfield(data.stats, 'episodeReward')
+            warning('没有训练统计数据');
+            return;
+        end
+        
+        fig = figure('Position', [100, 100, 1400, 600], 'Visible', 'off');
         
         episodes = 1:length(data.stats.qValue);
+        episodeReward = data.stats.episodeReward;
+        movingAvg = movmean(episodeReward, 10);
         
-        % 中文版
-        subplot(2, 2, 1);
-        plot(episodes, data.stats.qValue, 'LineWidth', 2);
+        % 绘制原始奖励和移动平均
+        plot(episodes, episodeReward, 'Color', [0.7, 0.7, 0.7], 'LineWidth', 1, ...
+            'DisplayName', '每回合奖励');
         hold on;
-        plot(episodes, movmean(data.stats.qValue, 20), 'LineWidth', 3);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('累积奖励', 'FontSize', 12);
-        title('训练奖励曲线', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'原始', '平滑'}, 'FontSize', 10);
-        grid on;
+        plot(episodes, movingAvg, 'LineWidth', 2.5, 'Color', [0.2, 0.4, 0.8], ...
+            'DisplayName', '10回合移动平均');
         
-        subplot(2, 2, 2);
-        plot(episodes, data.stats.criticLoss, 'LineWidth', 2);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('Critic 损失', 'FontSize', 12);
-        title('Critic 网络损失', 'FontSize', 14, 'FontWeight', 'bold');
-        grid on;
-        
-        subplot(2, 2, 3);
-        plot(episodes, data.stats.actorLoss, 'LineWidth', 2);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('Actor 损失', 'FontSize', 12);
-        title('Actor 网络损失', 'FontSize', 14, 'FontWeight', 'bold');
-        grid on;
-        
-        subplot(2, 2, 4);
-        plot(episodes, data.stats.tdError, 'LineWidth', 2);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('TD 误差', 'FontSize', 12);
-        title('时序差分误差', 'FontSize', 14, 'FontWeight', 'bold');
+        xlabel('训练回合', 'FontSize', 14);
+        ylabel('累计奖励', 'FontSize', 14);
+        title('Improved SAC 训练动态特性', 'FontSize', 16, 'FontWeight', 'bold');
+        legend('Location', 'best', 'FontSize', 12);
         grid on;
         
         saveas(fig, fullfile(outputPath, 'Chinese', '01_训练动态特性.png'));
         savefig(fig, fullfile(outputPath, 'Chinese', '01_训练动态特性.fig'));
         
         % 英文版
-        subplot(2, 2, 1);
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Reward', 'FontSize', 12);
-        title('Training Reward', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'Raw', 'Smoothed'}, 'FontSize', 10);
-        
-        subplot(2, 2, 2);
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Critic Loss', 'FontSize', 12);
-        title('Critic Loss', 'FontSize', 14, 'FontWeight', 'bold');
-        
-        subplot(2, 2, 3);
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Actor Loss', 'FontSize', 12);
-        title('Actor Loss', 'FontSize', 14, 'FontWeight', 'bold');
-        
-        subplot(2, 2, 4);
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('TD Error', 'FontSize', 12);
-        title('TD Error', 'FontSize', 14, 'FontWeight', 'bold');
+        xlabel('Episodes', 'FontSize', 14);
+        ylabel('Cumulative Reward', 'FontSize', 14);
+        title('Improved SAC Training Dynamics', 'FontSize', 16, 'FontWeight', 'bold');
+        h = legend;
+        h.String{1} = 'Episode Reward';
+        h.String{2} = '10-Episode Moving Average';
         
         saveas(fig, fullfile(outputPath, 'English', '01_training_dynamics.png'));
         savefig(fig, fullfile(outputPath, 'English', '01_training_dynamics.fig'));
         close(fig);
     catch ME
-        warning(['训练动态图生成失败: ' ME.message]);
+        warning(['训练动态特性图生成失败: ' ME.message]);
     end
 end
 
-function generatePolicyAnalysis(~, outputPath)
-    fprintf('生成策略分析图表...\n');
+function generateCoolingPerformanceAnalysis(data, outputPath)
+    % 降温能力分析
     try
-        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
+        if ~isfield(data, 'metrics')
+            warning('没有性能指标数据');
+            return;
+        end
         
-        tempRange = 60:0.5:90;
-        optimalActions = tanh((75 - tempRange) / 10);
+        fig = figure('Position', [100, 100, 1200, 800], 'Visible', 'off');
         
-        plot(tempRange, optimalActions, 'LineWidth', 3);
+        % 1. 基础误差指标
+        subplot(2, 3, 1);
+        metrics1 = [data.metrics.mae, data.metrics.rmse, data.metrics.maxError];
+        bar(metrics1, 'FaceColor', [0.25, 0.55, 0.85]);
+        set(gca, 'XTickLabel', {'MAE', 'RMSE', 'MaxAE'});
+        ylabel('误差 (°C)', 'FontSize', 11);
+        title('基础误差指标', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        
+        % 2. 工业控制指标
+        subplot(2, 3, 2);
+        metrics2 = [data.metrics.ise, data.metrics.iae, data.metrics.itae];
+        bar(metrics2, 'FaceColor', [0.85, 0.45, 0.25]);
+        set(gca, 'XTickLabel', {'ISE', 'IAE', 'ITAE'});
+        ylabel('指标值', 'FontSize', 11);
+        title('工业控制指标', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        
+        % 3. 动态性能指标
+        subplot(2, 3, 3);
+        metrics3 = [data.metrics.settling_time, data.metrics.overshoot, ...
+                    data.metrics.steadyStateError];
+        bar(metrics3, 'FaceColor', [0.45, 0.75, 0.35]);
+        set(gca, 'XTickLabel', {'调节时间', '超调量', '稳态误差'});
+        ylabel('指标值', 'FontSize', 11);
+        title('动态性能指标', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        
+        % 4. 控制精度指标
+        subplot(2, 3, 4);
+        metrics4 = [data.metrics.precision_2c, data.metrics.precision_1c, ...
+                    data.metrics.tempStability * 100];
+        bar(metrics4, 'FaceColor', [0.75, 0.25, 0.65]);
+        set(gca, 'XTickLabel', {'±2°C精度', '±1°C精度', '稳定性'});
+        ylabel('百分比 (%)', 'FontSize', 11);
+        title('控制精度指标', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        
+        % 5. 能效指标
+        subplot(2, 3, 5);
+        metrics5 = [data.metrics.totalEnergy, data.metrics.energyEfficiency * 1000];
+        bar(metrics5, 'FaceColor', [0.95, 0.65, 0.15]);
+        set(gca, 'XTickLabel', {'总能耗', '能效比×1000'});
+        ylabel('指标值', 'FontSize', 11);
+        title('能效指标', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        
+        % 6. 综合性能评分
+        subplot(2, 3, 6);
+        metrics6 = [data.metrics.precisionScore, data.metrics.efficiencyScore, ...
+                    data.metrics.stabilityScore, data.metrics.speedScore];
+        bar(metrics6, 'FaceColor', [0.35, 0.65, 0.95]);
+        set(gca, 'XTickLabel', {'精度', '能效', '稳定', '速度'});
+        ylabel('评分', 'FontSize', 11);
+        title('综合性能评分', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        ylim([0 100]);
+        
+        sgtitle('Improved SAC 降温能力完整分析', 'FontSize', 16, 'FontWeight', 'bold');
+        
+        saveas(fig, fullfile(outputPath, 'Chinese', '02_降温能力分析.png'));
+        savefig(fig, fullfile(outputPath, 'Chinese', '02_降温能力分析.fig'));
+        
+        % 英文版标题
+        subplot(2, 3, 1);
+        set(gca, 'XTickLabel', {'MAE', 'RMSE', 'MaxAE'});
+        ylabel('Error (°C)', 'FontSize', 11);
+        title('Basic Error Metrics', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        subplot(2, 3, 2);
+        title('Industrial Control Metrics', 'FontSize', 12, 'FontWeight', 'bold');
+        ylabel('Metric Value', 'FontSize', 11);
+        
+        subplot(2, 3, 3);
+        set(gca, 'XTickLabel', {'Settling Time', 'Overshoot', 'SS Error'});
+        ylabel('Metric Value', 'FontSize', 11);
+        title('Dynamic Performance', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        subplot(2, 3, 4);
+        set(gca, 'XTickLabel', {'±2°C', '±1°C', 'Stability'});
+        ylabel('Percentage (%)', 'FontSize', 11);
+        title('Control Precision', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        subplot(2, 3, 5);
+        set(gca, 'XTickLabel', {'Total Energy', 'Efficiency×1000'});
+        ylabel('Metric Value', 'FontSize', 11);
+        title('Energy Efficiency', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        subplot(2, 3, 6);
+        set(gca, 'XTickLabel', {'Precision', 'Efficiency', 'Stability', 'Speed'});
+        ylabel('Score', 'FontSize', 11);
+        title('Performance Scores', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        sgtitle('Improved SAC Cooling Performance Analysis', 'FontSize', 16, 'FontWeight', 'bold');
+        
+        saveas(fig, fullfile(outputPath, 'English', '02_cooling_analysis.png'));
+        savefig(fig, fullfile(outputPath, 'English', '02_cooling_analysis.fig'));
+        close(fig);
+    catch ME
+        warning(['降温能力分析图生成失败: ' ME.message]);
+    end
+end
+
+function generateTemperatureControl(data, outputPath)
+    % 🔥 温度控制效果（修复版 - 添加原始温度对比）
+    try
+        if ~isfield(data.evaluation, 'Time') || ~isfield(data.evaluation, 'Actual')
+            warning('没有温度数据');
+            return;
+        end
+        
+        fig = figure('Position', [100, 100, 1400, 600], 'Visible', 'off');
+        
+        time = data.evaluation.Time;
+        actual_temps = data.evaluation.Actual;
+        
+        % 🔥 计算原始温度（降温前）
+        if isfield(data.evaluation, 'ActualCooling')
+            original_temps = actual_temps + data.evaluation.ActualCooling;
+            
+            % 绘制原始温度和降温后温度的对比
+            plot(time, original_temps, 'r--', 'LineWidth', 2, 'DisplayName', '原始温度（降温前）');
+            hold on;
+            plot(time, actual_temps, 'b-', 'LineWidth', 2.5, 'DisplayName', '实际温度（降温后）');
+        else
+            % 如果没有降温数据，只绘制实际温度
+            plot(time, actual_temps, 'b-', 'LineWidth', 2.5, 'DisplayName', '实际温度');
+            hold on;
+        end
+        
+        % 添加温度区间标记
+        yLimits = ylim;
+        plot([min(time), max(time)], [75, 75], ...
+            'Color', [0.8, 0.2, 0.2], 'LineStyle', '-.', 'LineWidth', 1.5, ...
+            'DisplayName', '高温阈值 (75°C)');
+        plot([min(time), max(time)], [65, 65], ...
+            'Color', [1, 0.5, 0], 'LineStyle', '-.', 'LineWidth', 1.5, ...
+            'DisplayName', '中温阈值 (65°C)');
+        
+        xlabel('时间 (小时)', 'FontSize', 14);
+        ylabel('油温 (°C)', 'FontSize', 14);
+        title('Improved SAC 温度控制效果对比', 'FontSize', 16, 'FontWeight', 'bold');
+        legend('Location', 'best', 'FontSize', 11);
+        grid on;
+        ylim(yLimits);
+        
+        saveas(fig, fullfile(outputPath, 'Chinese', '03_温度控制效果.png'));
+        savefig(fig, fullfile(outputPath, 'Chinese', '03_温度控制效果.fig'));
+        
+        % 英文版
+        xlabel('Time (hours)', 'FontSize', 14);
+        ylabel('Oil Temperature (°C)', 'FontSize', 14);
+        title('Improved SAC Temperature Control Comparison', 'FontSize', 16, 'FontWeight', 'bold');
+        h = legend;
+        if length(h.String) >= 4
+            h.String{1} = 'Original Temp (Before Cooling)';
+            h.String{2} = 'Actual Temp (After Cooling)';
+            h.String{3} = 'High Temp Threshold (75°C)';
+            h.String{4} = 'Medium Temp Threshold (65°C)';
+        end
+        
+        saveas(fig, fullfile(outputPath, 'English', '03_temperature_control.png'));
+        savefig(fig, fullfile(outputPath, 'English', '03_temperature_control.fig'));
+        close(fig);
+    catch ME
+        warning(['温度控制效果图生成失败: ' ME.message]);
+    end
+end
+function generateCoolingTimeSeries(data, outputPath)
+    % 降温时序分析
+    try
+        % 🔥 修复：添加数据有效性检查
+        if ~isfield(data.evaluation, 'Time') || ...
+           ~isfield(data.evaluation, 'ActualCooling') || ...
+           ~isfield(data.evaluation, 'TargetCooling')
+            warning('没有完整的降温数据');
+            return;
+        end
+        
+        fig = figure('Position', [100, 100, 1400, 600], 'Visible', 'off');
+        
+        % 🔥 修复：使用data.evaluation.Time而不是未定义的nSteps
+        time = data.evaluation.Time;
+        actual = data.evaluation.ActualCooling;
+        target = data.evaluation.TargetCooling;
+        
+        % 绘制目标和实际降温
+        plot(time, target, 'r--', 'LineWidth', 2.5, 'DisplayName', '目标降温');
         hold on;
-        scatter(tempRange(1:5:end), optimalActions(1:5:end), 80, 'filled');
-        xlabel('当前温度 (°C)', 'FontSize', 12);
-        ylabel('最优动作', 'FontSize', 12);
-        title('温度-动作映射', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'策略曲线', '采样点'}, 'FontSize', 10);
+        plot(time, actual, 'b-', 'LineWidth', 2, 'DisplayName', '实际降温');
+        
+        % 添加误差带
+        fill([time; flipud(time)], [target+1; flipud(target-1)], ...
+            'r', 'FaceAlpha', 0.1, 'EdgeColor', 'none', 'DisplayName', '±1°C误差带');
+        
+        xlabel('时间 (小时)', 'FontSize', 14);
+        ylabel('降温量 (°C)', 'FontSize', 14);
+        title('Improved SAC 降温效果时序分析', 'FontSize', 16, 'FontWeight', 'bold');
+        legend('Location', 'best', 'FontSize', 12);
         grid on;
         
-        saveas(fig, fullfile(outputPath, 'Chinese', '02_策略分析.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '02_策略分析.fig'));
+        saveas(fig, fullfile(outputPath, 'Chinese', '04_降温时序分析.png'));
+        savefig(fig, fullfile(outputPath, 'Chinese', '04_降温时序分析.fig'));
         
-        xlabel('Temperature (°C)', 'FontSize', 12);
-        ylabel('Action', 'FontSize', 12);
-        title('Policy Mapping', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'Policy', 'Samples'}, 'FontSize', 10);
+        % 英文版
+        xlabel('Time (hours)', 'FontSize', 14);
+        ylabel('Cooling Amount (°C)', 'FontSize', 14);
+        title('Improved SAC Cooling Performance Time Series', 'FontSize', 16, 'FontWeight', 'bold');
+        h = legend;
+        h.String{1} = 'Target Cooling';
+        h.String{2} = 'Actual Cooling';
+        h.String{3} = '±1°C Error Band';
         
-        saveas(fig, fullfile(outputPath, 'English', '02_policy_analysis.png'));
-        savefig(fig, fullfile(outputPath, 'English', '02_policy_analysis.fig'));
+        saveas(fig, fullfile(outputPath, 'English', '04_cooling_time_series.png'));
+        savefig(fig, fullfile(outputPath, 'English', '04_cooling_time_series.fig'));
         close(fig);
     catch ME
-        warning(['策略分析图生成失败: ' ME.message]);
+        warning(['降温时序分析图生成失败: ' ME.message]);
+        fprintf('错误详情: %s\n', ME.message);
     end
 end
 
-function generateValueFunctionAnalysis(data, outputPath)
-    fprintf('生成价值函数分析图表...\n');
+function generateActionAnalysis(data, outputPath)
+    % 控制动作分析
     try
-        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
-        episodes = 1:length(data.stats.qValue);
-        plot(episodes, data.stats.qValue, 'LineWidth', 2.5);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('平均回报', 'FontSize', 12); % ✓ 修复：改为"平均回报"
-        title('回报函数演化', 'FontSize', 14, 'FontWeight', 'bold');
+        if ~isfield(data.evaluation, 'Actions') || ~isfield(data.evaluation, 'Time')
+            warning('没有动作数据');
+            return;
+        end
+        
+        fig = figure('Position', [100, 100, 1400, 900], 'Visible', 'off');
+        
+        actions = data.evaluation.Actions;
+        time = data.evaluation.Time;
+        
+        % 1. 泵压力
+        subplot(3, 1, 1);
+        plot(time, actions(:, 1), 'LineWidth', 2);
+        xlabel('时间 (小时)', 'FontSize', 11);
+        ylabel('压力 (kPa)', 'FontSize', 11);
+        title('泵压力', 'FontSize', 12, 'FontWeight', 'bold');
         grid on;
+        ylim([2 5]);
         
-        saveas(fig, fullfile(outputPath, 'Chinese', '03_价值函数分析.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '03_价值函数分析.fig'));
+        % 2. 帕尔贴开度
+        subplot(3, 1, 2);
+        plot(time, actions(:, 2), 'LineWidth', 2);
+        xlabel('时间 (小时)', 'FontSize', 11);
+        ylabel('开度 (0-1)', 'FontSize', 11);
+        title('帕尔贴开度', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        ylim([0 1]);
         
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Average Reward', 'FontSize', 12);
-        title('Reward Evolution', 'FontSize', 14, 'FontWeight', 'bold');
+        % 3. 阀门开度
+        subplot(3, 1, 3);
+        plot(time, actions(:, 3), 'LineWidth', 2);
+        xlabel('时间 (小时)', 'FontSize', 11);
+        ylabel('开度 (%)', 'FontSize', 11);
+        title('阀门开度', 'FontSize', 12, 'FontWeight', 'bold');
+        grid on;
+        ylim([0 100]);
         
-        saveas(fig, fullfile(outputPath, 'English', '03_value_function_analysis.png'));
-        savefig(fig, fullfile(outputPath, 'English', '03_value_function_analysis.fig'));
+        saveas(fig, fullfile(outputPath, 'Chinese', '05_控制动作分析.png'));
+        savefig(fig, fullfile(outputPath, 'Chinese', '05_控制动作分析.fig'));
+        
+        % 英文版
+        subplot(3, 1, 1);
+        ylabel('Pressure (kPa)', 'FontSize', 11);
+        title('Pump Pressure', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        subplot(3, 1, 2);
+        ylabel('Opening (0-1)', 'FontSize', 11);
+        title('Peltier Opening', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        subplot(3, 1, 3);
+        xlabel('Time (hours)', 'FontSize', 11);
+        ylabel('Opening (%)', 'FontSize', 11);
+        title('Valve Opening', 'FontSize', 12, 'FontWeight', 'bold');
+        
+        saveas(fig, fullfile(outputPath, 'English', '05_action_analysis.png'));
+        savefig(fig, fullfile(outputPath, 'English', '05_action_analysis.fig'));
         close(fig);
     catch ME
-        warning(['价值函数图生成失败: ' ME.message]);
+        warning(['控制动作分析图生成失败: ' ME.message]);
+    end
+end
+
+function generateLearningCurves(data, outputPath)
+    % 学习曲线
+    try
+        hasCriticLoss = isfield(data.stats, 'criticLoss') && ~isempty(data.stats.criticLoss);
+        hasActorLoss = isfield(data.stats, 'actorLoss') && ~isempty(data.stats.actorLoss);
+        
+        if ~hasCriticLoss && ~hasActorLoss
+            warning('没有损失数据');
+            return;
+        end
+        
+        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
+        
+        hold on;
+        if hasCriticLoss
+            episodes = 1:length(data.stats.criticLoss);
+            plot(episodes, movmean(data.stats.criticLoss, 20), 'LineWidth', 2, ...
+                'DisplayName', 'Critic Loss');
+        end
+        
+        if hasActorLoss
+            episodes = 1:length(data.stats.actorLoss);
+            plot(episodes, movmean(data.stats.actorLoss, 20), 'LineWidth', 2, ...
+                'DisplayName', 'Actor Loss');
+        end
+        
+        xlabel('训练步数', 'FontSize', 12);
+        ylabel('损失', 'FontSize', 12);
+        title('学习曲线（20步移动平均）', 'FontSize', 14, 'FontWeight', 'bold');
+        legend('Location', 'best', 'FontSize', 10);
+        grid on;
+        
+        saveas(fig, fullfile(outputPath, 'Chinese', '06_学习曲线.png'));
+        savefig(fig, fullfile(outputPath, 'Chinese', '06_学习曲线.fig'));
+        
+        % 英文版
+        xlabel('Training Steps', 'FontSize', 12);
+        ylabel('Loss', 'FontSize', 12);
+        title('Learning Curves (20-Step Moving Average)', 'FontSize', 14, 'FontWeight', 'bold');
+        
+        saveas(fig, fullfile(outputPath, 'English', '06_learning_curves.png'));
+        savefig(fig, fullfile(outputPath, 'English', '06_learning_curves.fig'));
+        close(fig);
+    catch ME
+        warning(['学习曲线图生成失败: ' ME.message]);
     end
 end
 
 function generateEntropyAnalysis(data, outputPath)
-    fprintf('生成熵调节分析图表...\n');
+    % 熵调节分析
     try
+        hasEntropy = isfield(data.stats, 'entropy') && ~isempty(data.stats.entropy);
+        hasAlpha = isfield(data.stats, 'alpha') && ~isempty(data.stats.alpha);
+        
+        if ~hasEntropy || ~hasAlpha
+            warning('没有熵或alpha数据');
+            return;
+        end
+        
         fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
         episodes = 1:length(data.stats.entropy);
         
@@ -329,197 +654,140 @@ function generateEntropyAnalysis(data, outputPath)
         plot(episodes, data.stats.alpha, 'LineWidth', 2.5);
         ylabel('熵系数 α', 'FontSize', 12);
         
-        xlabel('训练回合', 'FontSize', 12);
+        xlabel('训练步数', 'FontSize', 12);
         title('自适应熵调节', 'FontSize', 14, 'FontWeight', 'bold');
         legend({'策略熵', '熵系数'}, 'FontSize', 10);
         grid on;
         
-        saveas(fig, fullfile(outputPath, 'Chinese', '04_熵调节分析.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '04_熵调节分析.fig'));
+        saveas(fig, fullfile(outputPath, 'Chinese', '07_熵调节分析.png'));
+        savefig(fig, fullfile(outputPath, 'Chinese', '07_熵调节分析.fig'));
         
+        % 英文版
         yyaxis left;
         ylabel('Entropy', 'FontSize', 12);
         yyaxis right;
         ylabel('Alpha', 'FontSize', 12);
-        xlabel('Episodes', 'FontSize', 12);
-        title('Adaptive Entropy', 'FontSize', 14, 'FontWeight', 'bold');
+        xlabel('Training Steps', 'FontSize', 12);
+        title('Adaptive Entropy Tuning', 'FontSize', 14, 'FontWeight', 'bold');
         legend({'Entropy', 'Alpha'}, 'FontSize', 10);
         
-        saveas(fig, fullfile(outputPath, 'English', '04_entropy_analysis.png'));
-        savefig(fig, fullfile(outputPath, 'English', '04_entropy_analysis.fig'));
+        saveas(fig, fullfile(outputPath, 'English', '07_entropy_analysis.png'));
+        savefig(fig, fullfile(outputPath, 'English', '07_entropy_analysis.fig'));
         close(fig);
     catch ME
         warning(['熵调节图生成失败: ' ME.message]);
     end
 end
 
-function generateActionDistribution(~, outputPath)
-    fprintf('生成动作分布分析图表...\n');
+function generatePerformanceMetrics(data, outputPath)
+    % 综合性能指标
     try
-        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
-        episodes = 1:200;
-        actionStd = 0.8 * exp(-episodes/150) + 0.1;
-        plot(episodes, actionStd, 'LineWidth', 3);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('动作标准差', 'FontSize', 12);
-        title('动作不确定性衰减', 'FontSize', 14, 'FontWeight', 'bold');
-        grid on;
+        if ~isfield(data, 'metrics')
+            warning('没有指标数据');
+            return;
+        end
         
-        saveas(fig, fullfile(outputPath, 'Chinese', '05_动作分布.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '05_动作分布.fig'));
-        
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Action Std', 'FontSize', 12);
-        title('Action Uncertainty', 'FontSize', 14, 'FontWeight', 'bold');
-        
-        saveas(fig, fullfile(outputPath, 'English', '05_action_distribution.png'));
-        savefig(fig, fullfile(outputPath, 'English', '05_action_distribution.fig'));
-        close(fig);
-    catch ME
-        warning(['动作分布图生成失败: ' ME.message]);
-    end
-end
+        fig = figure('Position', [100, 100, 1600, 1200], 'Visible', 'off');
 
-function generateTemperatureControl(data, outputPath)
-    fprintf('生成温度控制效果图表...\n');
-    try
-        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
+        % 指标分组
+        metrics_groups = {
+            {'mae', 'rmse', 'maxError'}, ...
+            {'ise', 'iae', 'itae'}, ...
+            {'settling_time', 'overshoot', 'steadyStateError'}, ...
+            {'precision_2c', 'precision_1c', 'tempStability'}, ...
+            {'totalEnergy', 'energyEfficiency'}, ...
+            {'precisionScore', 'efficiencyScore', 'stabilityScore', 'speedScore'}
+        };
         
-        % ✓ 修复：时间单位改为小时
-        plot(data.evaluation.Time, data.evaluation.Setpoint, 'r--', 'LineWidth', 2);
-        hold on;
-        plot(data.evaluation.Time, data.evaluation.Actual, 'b-', 'LineWidth', 2);
-        xlabel('时间 (小时)', 'FontSize', 12); % ✓ 修复
-        ylabel('温度 (°C)', 'FontSize', 12);
-        title('温度控制效果', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'设定值', '实际值'}, 'FontSize', 10);
-        grid on;
+        group_titles_cn = {
+            '基础误差指标', '工业控制指标', '动态性能指标', ...
+            '控制精度指标', '能效指标', '综合性能评分'
+        };
         
-        saveas(fig, fullfile(outputPath, 'Chinese', '06_温度控制.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '06_温度控制.fig'));
+        group_titles_en = {
+            'Basic Error Metrics', 'Industrial Control', 'Dynamic Performance', ...
+            'Control Precision', 'Energy Efficiency', 'Performance Scores'
+        };
         
-        xlabel('Time (hours)', 'FontSize', 12); % ✓ 修复
-        ylabel('Temperature (°C)', 'FontSize', 12);
-        title('Control Performance', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'Setpoint', 'Actual'}, 'FontSize', 10);
+        metric_names_cn = {
+            {'MAE (°C)', 'RMSE (°C)', 'MaxAE (°C)'}, ...
+            {'ISE', 'IAE', 'ITAE'}, ...
+            {'调节时间', '超调量(%)', '稳态误差(°C)'}, ...
+            {'±2°C(%)', '±1°C(%)', '稳定性×100'}, ...
+            {'总能耗', '能效比×1000'}, ...
+            {'精度分', '能效分', '稳定分', '速度分'}
+        };
         
-        saveas(fig, fullfile(outputPath, 'English', '06_temperature_control.png'));
-        savefig(fig, fullfile(outputPath, 'English', '06_temperature_control.fig'));
+        metric_names_en = {
+            {'MAE (°C)', 'RMSE (°C)', 'MaxAE (°C)'}, ...
+            {'ISE', 'IAE', 'ITAE'}, ...
+            {'Settling', 'Overshoot', 'SS Error'}, ...
+            {'±2°C(%)', '±1°C(%)', 'Stability×100'}, ...
+            {'Energy', 'Efficiency×1000'}, ...
+            {'Precision', 'Efficiency', 'Stability', 'Speed'}
+        };
+        
+        % 绘制6个子图
+        for g = 1:6
+            subplot(3, 2, g);
+            
+            current_metrics = metrics_groups{g};
+            values = zeros(1, length(current_metrics));
+            
+            for m = 1:length(current_metrics)
+                metric_name = current_metrics{m};
+                if isfield(data.metrics, metric_name)
+                    val = data.metrics.(metric_name);
+                    % 特殊处理：能效比和稳定性需要放大
+                    if strcmp(metric_name, 'energyEfficiency')
+                        val = val * 1000;
+                    elseif strcmp(metric_name, 'tempStability')
+                        val = val * 100;
+                    end
+                    values(m) = val;
+                end
+            end
+            
+            bar(values, 'FaceColor', [0.25, 0.55, 0.85]);
+            set(gca, 'XTickLabel', metric_names_cn{g}, 'XTickLabelRotation', 20);
+            ylabel('指标值', 'FontSize', 11);
+            title(group_titles_cn{g}, 'FontSize', 13, 'FontWeight', 'bold');
+            grid on;
+            
+            % 在柱子上显示数值
+            for m = 1:length(values)
+                if values(m) ~= 0
+                    text(m, values(m), sprintf('%.2f', values(m)), ...
+                        'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom', ...
+                        'FontSize', 9);
+                end
+            end
+        end
+        
+        sgtitle('Improved SAC 综合性能指标（完整降温能力评价体系）', ...
+            'FontSize', 16, 'FontWeight', 'bold');
+        
+        saveas(fig, fullfile(outputPath, 'Chinese', '08_综合性能指标.png'));
+        savefig(fig, fullfile(outputPath, 'Chinese', '08_综合性能指标.fig'));
+        
+        % 英文版
+        for g = 1:6
+            subplot(3, 2, g);
+            set(gca, 'XTickLabel', metric_names_en{g});
+            ylabel('Metric Value', 'FontSize', 11);
+            title(group_titles_en{g}, 'FontSize', 13, 'FontWeight', 'bold');
+        end
+        sgtitle('Improved SAC Performance Metrics (Cooling-Based Evaluation)', ...
+            'FontSize', 16, 'FontWeight', 'bold');
+        
+        saveas(fig, fullfile(outputPath, 'English', '08_performance_metrics.png'));
+        savefig(fig, fullfile(outputPath, 'English', '08_performance_metrics.fig'));
         close(fig);
     catch ME
-        warning(['温度控制图生成失败: ' ME.message]);
-    end
-end
-
-function generateRewardDecomposition(~, outputPath)
-    fprintf('生成奖励分解分析图表...\n');
-    try
-        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
-        episodes = 1:200;
-        plot(episodes, -100*exp(-episodes/100), 'LineWidth', 2);
-        hold on;
-        plot(episodes, -50*exp(-episodes/120), 'LineWidth', 2);
-        plot(episodes, -30*exp(-episodes/80), 'LineWidth', 2);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('奖励分量', 'FontSize', 12);
-        title('奖励函数分解', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'温度', '能源', '安全'}, 'FontSize', 10);
-        grid on;
-        
-        saveas(fig, fullfile(outputPath, 'Chinese', '07_奖励分解.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '07_奖励分解.fig'));
-        
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Reward', 'FontSize', 12);
-        title('Reward Decomposition', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'Temp', 'Energy', 'Safety'}, 'FontSize', 10);
-        
-        saveas(fig, fullfile(outputPath, 'English', '07_reward_decomposition.png'));
-        savefig(fig, fullfile(outputPath, 'English', '07_reward_decomposition.fig'));
-        close(fig);
-    catch ME
-        warning(['奖励分解图生成失败: ' ME.message]);
-    end
-end
-
-function generateLearningCurves(data, outputPath)
-    fprintf('生成学习曲线图表...\n');
-    try
-        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
-        episodes = 1:length(data.stats.criticLoss);
-        plot(episodes, movmean(data.stats.criticLoss, 20), 'LineWidth', 2);
-        hold on;
-        plot(episodes, movmean(data.stats.actorLoss, 20), 'LineWidth', 2);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('损失', 'FontSize', 12);
-        title('学习曲线', 'FontSize', 14, 'FontWeight', 'bold');
-        legend({'Critic', 'Actor'}, 'FontSize', 10);
-        grid on;
-        
-        saveas(fig, fullfile(outputPath, 'Chinese', '08_学习曲线.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '08_学习曲线.fig'));
-        
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Loss', 'FontSize', 12);
-        title('Learning Curves', 'FontSize', 14, 'FontWeight', 'bold');
-        
-        saveas(fig, fullfile(outputPath, 'English', '08_learning_curves.png'));
-        savefig(fig, fullfile(outputPath, 'English', '08_learning_curves.fig'));
-        close(fig);
-    catch ME
-        warning(['学习曲线图生成失败: ' ME.message]);
-    end
-end
-
-function generateExplorationAnalysis(data, outputPath)
-    fprintf('生成探索策略分析图表...\n');
-    try
-        fig = figure('Position', [100, 100, 1200, 500], 'Visible', 'off');
-        episodes = 1:length(data.stats.entropy);
-        plot(episodes, data.stats.entropy, 'LineWidth', 2.5);
-        xlabel('训练回合', 'FontSize', 12);
-        ylabel('探索程度', 'FontSize', 12);
-        title('探索策略演化', 'FontSize', 14, 'FontWeight', 'bold');
-        grid on;
-        
-        saveas(fig, fullfile(outputPath, 'Chinese', '09_探索分析.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '09_探索分析.fig'));
-        
-        xlabel('Episodes', 'FontSize', 12);
-        ylabel('Exploration', 'FontSize', 12);
-        title('Exploration Strategy', 'FontSize', 14, 'FontWeight', 'bold');
-        
-        saveas(fig, fullfile(outputPath, 'English', '09_exploration_analysis.png'));
-        savefig(fig, fullfile(outputPath, 'English', '09_exploration_analysis.fig'));
-        close(fig);
-    catch ME
-        warning(['探索分析图生成失败: ' ME.message]);
-    end
-end
-
-function generatePerformanceMetrics(~, outputPath)
-    fprintf('生成综合性能指标图表...\n');
-    try
-        fig = figure('Position', [100, 100, 1200, 600], 'Visible', 'off');
-        metrics = {'MAE', 'RMSE', 'R²', '能效', '安全'};
-        values = [0.85, 0.88, 0.81, 0.92, 0.95];
-        bar(values, 'FaceColor', [0.3, 0.6, 0.8]);
-        set(gca, 'XTickLabel', metrics);
-        ylabel('归一化分数', 'FontSize', 12);
-        title('综合性能指标', 'FontSize', 14, 'FontWeight', 'bold');
-        ylim([0, 1]);
-        grid on;
-        
-        saveas(fig, fullfile(outputPath, 'Chinese', '10_性能指标.png'));
-        savefig(fig, fullfile(outputPath, 'Chinese', '10_性能指标.fig'));
-        
-        ylabel('Score', 'FontSize', 12);
-        title('Performance Metrics', 'FontSize', 14, 'FontWeight', 'bold');
-        
-        saveas(fig, fullfile(outputPath, 'English', '10_performance_metrics.png'));
-        savefig(fig, fullfile(outputPath, 'English', '10_performance_metrics.fig'));
-        close(fig);
-    catch ME
-        warning(['性能指标图生成失败: ' ME.message]);
+        warning(['综合性能指标图生成失败: ' ME.message]);
+        fprintf('错误详情: %s\n', ME.message);
+        if ~isempty(ME.stack)
+            fprintf('错误位置: %s (第 %d 行)\n', ME.stack(1).name, ME.stack(1).line);
+        end
     end
 end
